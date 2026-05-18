@@ -19,6 +19,7 @@ enum SOAPService {
     case renderingControl
     case zoneGroupTopology
     case contentDirectory
+    case musicServices
 
     /// Service type URN, used in both the SOAPACTION header and the
     /// xmlns:u attribute on the body element.
@@ -28,6 +29,7 @@ enum SOAPService {
         case .renderingControl:  return "urn:schemas-upnp-org:service:RenderingControl:1"
         case .zoneGroupTopology: return "urn:schemas-upnp-org:service:ZoneGroupTopology:1"
         case .contentDirectory:  return "urn:schemas-upnp-org:service:ContentDirectory:1"
+        case .musicServices:     return "urn:schemas-upnp-org:service:MusicServices:1"
         }
     }
 
@@ -38,6 +40,7 @@ enum SOAPService {
         case .renderingControl:  return "/MediaRenderer/RenderingControl/Control"
         case .zoneGroupTopology: return "/ZoneGroupTopology/Control"
         case .contentDirectory:  return "/MediaServer/ContentDirectory/Control"
+        case .musicServices:     return "/MusicServices/Control"
         }
     }
 
@@ -49,6 +52,7 @@ enum SOAPService {
         case .renderingControl:  return "/MediaRenderer/RenderingControl/Event"
         case .zoneGroupTopology: return "/ZoneGroupTopology/Event"
         case .contentDirectory:  return "/MediaServer/ContentDirectory/Event"
+        case .musicServices:     return "/MusicServices/Event"
         }
     }
 }
