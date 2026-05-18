@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="${SONOSBAR_VERSION:-0.1.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/SonosBar.app"
 DIST_DIR="$ROOT/dist"

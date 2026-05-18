@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.0) — creates a draft release, no tag pushed'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building version: $V"
+
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build .app (release, ad-hoc signed)
+        run: ./scripts/build-app.sh release
+
+      - name: Package DMG
+        env:
+          SONOSBAR_VERSION: ${{ steps.ver.outputs.version }}
+        run: ./scripts/make-dmg.sh
+
+      - name: Zip .app as fallback artifact
+        run: |
+          cd build
+          ditto -c -k --keepParent SonosBar.app "SonosBar-${{ steps.ver.outputs.version }}.app.zip"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SonosBar-${{ steps.ver.outputs.version }}
+          path: |
+            dist/SonosBar-*.dmg
+            build/SonosBar-*.app.zip
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SonosBar ${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            Unsigned build — first launch will require right-click → Open to bypass Gatekeeper.
+            macOS 26 (Tahoe) or later.
+          files: |
+            dist/SonosBar-${{ steps.ver.outputs.version }}.dmg
+            build/SonosBar-${{ steps.ver.outputs.version }}.app.zip
