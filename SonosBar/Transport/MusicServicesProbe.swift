@@ -131,14 +131,29 @@ struct MusicServicesProbe {
         out += "\n=== ContentDirectory.Browse ObjectID=\"0\" (root) ===\n"
         await dumpBrowse(objectID: "0", on: player, into: &out, limit: 50)
 
-        // Also try the Amazon Music service-scoped container. Standard ID
-        // convention: SQ:<n> for queues, FV:2 for favorites, RINCON_AS:<id>
-        // and S:<id> historically appear for music services. Try the most
-        // likely modern shape first.
-        for candidate in ["SVC:201", "S:201", "0/svc/201", "FV:201"] {
-            out += "\n=== ContentDirectory.Browse ObjectID=\"\(candidate)\" ===\n"
-            await dumpBrowse(objectID: candidate, on: player, into: &out, limit: 25)
+        // The previous root browse revealed the real container IDs:
+        // A: (library), S: (services), SQ: (saved queues), R: (radio),
+        // FV: (favorites), Q: (queue). Drill into S: to see linked
+        // services. For each direct child, drill one more level so we
+        // can see Amazon Music's top-level categories (if it's there).
+        out += "\n=== ContentDirectory.Browse ObjectID=\"S:\" (music services root) ===\n"
+        let serviceChildren = await collectChildContainerIDs(
+            objectID: "S:", on: player, into: &out, limit: 50
+        )
+
+        for childID in serviceChildren.prefix(20) {
+            out += "\n--- drill into \(childID) ---\n"
+            _ = await collectChildContainerIDs(
+                objectID: childID, on: player, into: &out, limit: 15
+            )
         }
+
+        // Also peek at R: (radio / TuneIn) for comparison — Amazon Music
+        // stations sometimes route through here on older firmware.
+        out += "\n=== ContentDirectory.Browse ObjectID=\"R:\" (radio root) ===\n"
+        _ = await collectChildContainerIDs(
+            objectID: "R:", on: player, into: &out, limit: 15
+        )
 
         out += "\n=== Interpretation hints ===\n"
         _ = "" // separator
@@ -150,6 +165,62 @@ struct MusicServicesProbe {
         out += "- If Amazon Music's Service entry isn't here, the account isn't linked on\n"
         out += "  this player — add it in the Sonos app first.\n"
         return out
+    }
+
+    /// Same as dumpBrowse but also returns the IDs of child containers
+    /// so the caller can drill deeper. Highlights any title containing
+    /// "amazon" with a star so it's easy to spot in the report.
+    @discardableResult
+    private func collectChildContainerIDs(
+        objectID: String,
+        on player: DiscoveredPlayer,
+        into out: inout String,
+        limit: Int
+    ) async -> [String] {
+        var childIDs: [String] = []
+        do {
+            let response = try await client.send(
+                action: "Browse",
+                service: .contentDirectory,
+                arguments: [
+                    ("ObjectID", objectID),
+                    ("BrowseFlag", "BrowseDirectChildren"),
+                    ("Filter", "*"),
+                    ("StartingIndex", "0"),
+                    ("RequestedCount", "\(limit)"),
+                    ("SortCriteria", "")
+                ],
+                to: player
+            )
+            let totalMatches = response.descendants(named: "TotalMatches").first?.trimmed ?? "?"
+            let numberReturned = response.descendants(named: "NumberReturned").first?.trimmed ?? "?"
+            out += "  TotalMatches: \(totalMatches), NumberReturned: \(numberReturned)\n"
+            guard let didlText = response.descendants(named: "Result").first?.trimmed,
+                  !didlText.isEmpty,
+                  let didl = try? XMLNode.parse(didlText) else {
+                out += "  (empty or unparseable Result)\n"
+                return []
+            }
+            for c in didl.descendants(named: "container") {
+                let id = c.attributes["id"] ?? "?"
+                let title = c.descendants(named: "title").first?.trimmed ?? ""
+                let cls = c.descendants(named: "class").first?.trimmed ?? ""
+                let marker = title.localizedCaseInsensitiveContains("amazon") ? "★" : " "
+                out += "  \(marker) C  id=\(id)  title=\(title)  class=\(cls)\n"
+                childIDs.append(id)
+            }
+            for i in didl.descendants(named: "item").prefix(limit) {
+                let id = i.attributes["id"] ?? "?"
+                let title = i.descendants(named: "title").first?.trimmed ?? ""
+                let res = i.first("res")?.trimmed ?? ""
+                let marker = title.localizedCaseInsensitiveContains("amazon") ? "★" : " "
+                out += "  \(marker) I  id=\(id)  title=\(title)\n"
+                if !res.isEmpty { out += "     res: \(res)\n" }
+            }
+        } catch {
+            out += "  ERROR: \(error.localizedDescription)\n"
+        }
+        return childIDs
     }
 
     /// Helper: Browse a ContentDirectory ObjectID and dump the parsed
