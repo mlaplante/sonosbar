@@ -494,19 +494,6 @@ final class SonosCoordinator {
         }
     }
 
-    // MARK: - Music Services probe (chunk B spike)
-    //
-    // Returns a human-readable report on what music services and accounts
-    // the speaker exposes. Used by Settings → Diagnostics to inform the
-    // SMAPI search architecture before we commit to one.
-
-    func probeMusicServices() async -> String {
-        guard let group = selectedGroup,
-              let coord = coordinator(of: group) else {
-            return "No speaker selected — open the menu and pick a zone first."
-        }
-        return await MusicServicesProbe().probe(on: coord)
-    }
 
     private func runOnSelectedCoordinator(
         _ body: @escaping @Sendable (DiscoveredPlayer) async throws -> Void

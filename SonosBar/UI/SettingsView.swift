@@ -17,9 +17,6 @@ struct SettingsView: View {
 
     @Environment(SonosCoordinator.self) private var coordinator
 
-    @State private var probeResult: String = ""
-    @State private var probeRunning = false
-
     var body: some View {
         // @Bindable lets us bind directly to @Observable properties on
         // the settings store. This is the SwiftUI 5+ replacement for
@@ -44,44 +41,6 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Section("Diagnostics") {
-                HStack {
-                    Button {
-                        Task {
-                            probeRunning = true
-                            probeResult = await coordinator.probeMusicServices()
-                            probeRunning = false
-                        }
-                    } label: {
-                        if probeRunning {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Probe music services")
-                        }
-                    }
-                    .disabled(probeRunning)
-
-                    if !probeResult.isEmpty {
-                        Button("Copy") {
-                            let pb = NSPasteboard.general
-                            pb.clearContents()
-                            pb.setString(probeResult, forType: .string)
-                        }
-                    }
-                }
-                if !probeResult.isEmpty {
-                    ScrollView {
-                        Text(probeResult)
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6)
-                    }
-                    .frame(height: 200)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                }
-            }
-
             Section("About") {
                 Text("SonosBar 0.1.0")
                     .font(.callout)
@@ -92,6 +51,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 560)
+        .frame(width: 380, height: 380)
     }
 }
