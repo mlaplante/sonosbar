@@ -155,6 +155,19 @@ struct MusicServicesProbe {
             objectID: "R:", on: player, into: &out, limit: 15
         )
 
+        // Sanity checks: confirm Browse works at all on this firmware
+        // by hitting paths that should ALWAYS return content if anything
+        // does. A:ALBUM / A:ARTIST = local library (oldest feature);
+        // Q:0 = current queue. If these come back populated but S:
+        // and R: are empty, the lockdown is specific to cloud-linked
+        // services. If these ALSO return zero, something else is wrong.
+        for path in ["A:ALBUM", "A:ARTIST", "A:TRACKS", "Q:0", "R:0", "R:0/0", "S:0"] {
+            out += "\n=== ContentDirectory.Browse ObjectID=\"\(path)\" (sanity) ===\n"
+            _ = await collectChildContainerIDs(
+                objectID: path, on: player, into: &out, limit: 5
+            )
+        }
+
         out += "\n=== Interpretation hints ===\n"
         _ = "" // separator
         out += "- Match an Account's Type to a Service's Id to know which accounts are linked.\n"
