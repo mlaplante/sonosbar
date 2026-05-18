@@ -95,33 +95,53 @@ struct MusicServicesProbe {
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 out += "HTTP \(http.statusCode)\n"
             }
+            let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
+            // First: structured parse (case-sensitive on element names).
+            // If that misses, dump the raw payload so we can see the real
+            // element names / namespace prefixes the firmware uses.
             if let root = try? XMLNode.parse(data) {
                 let accounts = root.descendants(named: "Account")
-                out += "Accounts (\(accounts.count)):\n"
-                for acct in accounts {
-                    let type = acct.attributes["Type"] ?? "?"
+                let lowercase = root.descendants(named: "account")
+                out += "Parsed <Account> count: \(accounts.count), <account> count: \(lowercase.count)\n"
+                let all = accounts.isEmpty ? lowercase : accounts
+                for acct in all {
+                    let type = acct.attributes["Type"] ?? acct.attributes["type"] ?? "?"
                     let serial = acct.attributes["SerialNum"] ?? "?"
                     let active = acct.attributes["IsSignedIn"] ?? acct.attributes["Active"] ?? "?"
-                    let un = acct.first("UN")?.trimmed ?? ""
-                    let nn = acct.first("NN")?.trimmed ?? ""
-                    let md = acct.first("MD")?.trimmed ?? ""
-                    let oadid = acct.first("OADevID")?.trimmed ?? ""
-
+                    let un = acct.first("UN")?.trimmed ?? acct.first("un")?.trimmed ?? ""
+                    let nn = acct.first("NN")?.trimmed ?? acct.first("nn")?.trimmed ?? ""
+                    let md = acct.first("MD")?.trimmed ?? acct.first("md")?.trimmed ?? ""
                     out += "  Type \(type)  Serial \(serial)  Active \(active)\n"
-                    out += "      UN: \(un.isEmpty ? "(empty)" : un)\n"
-                    out += "      NN: \(nn.isEmpty ? "(empty)" : nn)\n"
-                    if !md.isEmpty { out += "      MD: \(md)\n" }
-                    if !oadid.isEmpty { out += "      OADevID: \(oadid)\n" }
+                    out += "      UN: \(un.isEmpty ? "(empty)" : un)  NN: \(nn.isEmpty ? "(empty)" : nn)  MD: \(md.isEmpty ? "(empty)" : md)\n"
                 }
-            } else {
-                let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
-                out += "(could not parse XML)\nRaw (first 800 chars):\n\(body.prefix(800))\n"
             }
+            out += "\nRaw body (\(data.count) bytes, first 1500 chars):\n"
+            out += String(body.prefix(1500))
+            out += "\n"
         } catch {
             out += "ERROR: \(error.localizedDescription)\n"
         }
 
+        // The speaker can proxy SMAPI calls through its own ContentDirectory.
+        // ObjectID="0" returns the root container hierarchy, which includes
+        // music services as children. Drilling into the service's subtree
+        // lets us browse and (depending on the service) search WITHOUT
+        // managing our own session token. This is the architecture node-sonos
+        // and SoCo use for music-service browsing.
+        out += "\n=== ContentDirectory.Browse ObjectID=\"0\" (root) ===\n"
+        await dumpBrowse(objectID: "0", on: player, into: &out, limit: 50)
+
+        // Also try the Amazon Music service-scoped container. Standard ID
+        // convention: SQ:<n> for queues, FV:2 for favorites, RINCON_AS:<id>
+        // and S:<id> historically appear for music services. Try the most
+        // likely modern shape first.
+        for candidate in ["SVC:201", "S:201", "0/svc/201", "FV:201"] {
+            out += "\n=== ContentDirectory.Browse ObjectID=\"\(candidate)\" ===\n"
+            await dumpBrowse(objectID: candidate, on: player, into: &out, limit: 25)
+        }
+
         out += "\n=== Interpretation hints ===\n"
+        _ = "" // separator
         out += "- Match an Account's Type to a Service's Id to know which accounts are linked.\n"
         out += "- Auth=\"DeviceLink\" or \"AppLink\" means OAuth via Sonos; we mint a SessionId\n"
         out += "  via GetSessionId(ServiceId, Username) then call the service's SecureUri with\n"
@@ -130,5 +150,62 @@ struct MusicServicesProbe {
         out += "- If Amazon Music's Service entry isn't here, the account isn't linked on\n"
         out += "  this player — add it in the Sonos app first.\n"
         return out
+    }
+
+    /// Helper: Browse a ContentDirectory ObjectID and dump the parsed
+    /// title/class/uri of each direct child, plus a count and the raw
+    /// DIDL on parse failure. Used by the probe to understand the
+    /// speaker's content hierarchy without committing to a domain model.
+    private func dumpBrowse(
+        objectID: String,
+        on player: DiscoveredPlayer,
+        into out: inout String,
+        limit: Int
+    ) async {
+        do {
+            let response = try await client.send(
+                action: "Browse",
+                service: .contentDirectory,
+                arguments: [
+                    ("ObjectID", objectID),
+                    ("BrowseFlag", "BrowseDirectChildren"),
+                    ("Filter", "*"),
+                    ("StartingIndex", "0"),
+                    ("RequestedCount", "\(limit)"),
+                    ("SortCriteria", "")
+                ],
+                to: player
+            )
+            let totalMatches = response.descendants(named: "TotalMatches").first?.trimmed ?? "?"
+            let numberReturned = response.descendants(named: "NumberReturned").first?.trimmed ?? "?"
+            out += "TotalMatches: \(totalMatches), NumberReturned: \(numberReturned)\n"
+            guard let didlText = response.descendants(named: "Result").first?.trimmed,
+                  !didlText.isEmpty else {
+                out += "(empty Result)\n"
+                return
+            }
+            guard let didl = try? XMLNode.parse(didlText) else {
+                out += "(could not parse DIDL)\nRaw (first 600 chars):\n\(didlText.prefix(600))\n"
+                return
+            }
+            let containers = didl.descendants(named: "container")
+            let items = didl.descendants(named: "item")
+            out += "Containers: \(containers.count), Items: \(items.count)\n"
+            for c in containers.prefix(limit) {
+                let id = c.attributes["id"] ?? "?"
+                let parent = c.attributes["parentID"] ?? "?"
+                let title = c.descendants(named: "title").first?.trimmed ?? ""
+                let cls = c.descendants(named: "class").first?.trimmed ?? ""
+                out += "  C  id=\(id)  parent=\(parent)  class=\(cls)\n     title: \(title)\n"
+            }
+            for i in items.prefix(limit) {
+                let id = i.attributes["id"] ?? "?"
+                let title = i.descendants(named: "title").first?.trimmed ?? ""
+                let res = i.first("res")?.trimmed ?? ""
+                out += "  I  id=\(id)\n     title: \(title)\n     res:   \(res)\n"
+            }
+        } catch {
+            out += "ERROR: \(error.localizedDescription)\n"
+        }
     }
 }
