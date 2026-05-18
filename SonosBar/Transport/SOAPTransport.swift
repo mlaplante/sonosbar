@@ -54,6 +54,24 @@ struct SOAPTransport: SonosTransport {
         )
     }
 
+    func seek(toSeconds seconds: Int, on player: DiscoveredPlayer) async throws {
+        let clamped = max(0, seconds)
+        let h = clamped / 3600
+        let m = (clamped % 3600) / 60
+        let s = clamped % 60
+        let target = String(format: "%02d:%02d:%02d", h, m, s)
+        _ = try await client.send(
+            action: "Seek",
+            service: .avTransport,
+            arguments: [
+                ("InstanceID", "0"),
+                ("Unit", "REL_TIME"),
+                ("Target", target)
+            ],
+            to: player
+        )
+    }
+
     func playbackSnapshot(of player: DiscoveredPlayer) async throws -> PlaybackSnapshot {
         async let transportTask = client.send(
             action: "GetTransportInfo",

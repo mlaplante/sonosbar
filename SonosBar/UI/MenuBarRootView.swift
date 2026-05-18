@@ -130,6 +130,7 @@ struct MenuBarRootView: View {
     private var nowPlayingContent: some View {
         if let group = coordinator.selectedGroup {
             NowPlayingCard(group: group)
+            ScrubberRow(group: group)
             TransportRow()
             VolumeRow()
             SpeakerList(group: group, isExpanded: $isSpeakerListExpanded)
@@ -260,6 +261,101 @@ private struct NowPlayingCard: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
+    }
+}
+
+// MARK: - Scrubber
+
+/// Thin progress bar showing position/duration with click-to-seek.
+/// Position advances locally on a 1 Hz timer while playing so the bar
+/// feels alive without spamming the speaker with GetPositionInfo polls.
+/// Click anywhere along the track to seek; we issue a Seek then refresh
+/// the snapshot so the canonical position takes over.
+private struct ScrubberRow: View {
+
+    @Environment(SonosCoordinator.self) private var coordinator
+    let group: ZoneGroup
+
+    @State private var localPosition: TimeInterval = 0
+    @State private var lastSnapshotPosition: TimeInterval = -1
+    @State private var dragPreview: TimeInterval?
+
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var snapshot: PlaybackSnapshot {
+        coordinator.playback[group.id] ?? PlaybackSnapshot()
+    }
+
+    private var duration: TimeInterval { snapshot.track.duration }
+    private var isPlaying: Bool { snapshot.state.isActive }
+    private var isSeekable: Bool { duration > 0 }
+
+    var body: some View {
+        if isSeekable {
+            VStack(spacing: 2) {
+                GeometryReader { geo in
+                    let displayed = dragPreview ?? localPosition
+                    let progress = duration > 0 ? min(max(displayed / duration, 0), 1) : 0
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(.quaternary)
+                        Capsule()
+                            .fill(.tint)
+                            .frame(width: geo.size.width * progress)
+                    }
+                    .frame(height: 4)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let ratio = min(max(value.location.x / geo.size.width, 0), 1)
+                                dragPreview = ratio * duration
+                            }
+                            .onEnded { value in
+                                let ratio = min(max(value.location.x / geo.size.width, 0), 1)
+                                let target = Int((ratio * duration).rounded())
+                                dragPreview = nil
+                                localPosition = TimeInterval(target)
+                                Task { await coordinator.seek(toSeconds: target) }
+                            }
+                    )
+                }
+                .frame(height: 6)
+
+                HStack {
+                    Text(format(dragPreview ?? localPosition))
+                    Spacer()
+                    Text(format(duration))
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .onAppear {
+                localPosition = snapshot.track.position
+                lastSnapshotPosition = snapshot.track.position
+            }
+            .onReceive(timer) { _ in
+                // If the speaker just told us a new position (via a
+                // refresh), snap to it; otherwise advance locally.
+                if snapshot.track.position != lastSnapshotPosition {
+                    localPosition = snapshot.track.position
+                    lastSnapshotPosition = snapshot.track.position
+                } else if isPlaying && dragPreview == nil {
+                    localPosition = min(localPosition + 1, duration)
+                }
+            }
+        }
+    }
+
+    private func format(_ t: TimeInterval) -> String {
+        let total = max(0, Int(t))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 }
 

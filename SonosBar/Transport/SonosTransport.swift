@@ -31,6 +31,11 @@ protocol SonosTransport: Sendable {
     func next(on player: DiscoveredPlayer) async throws
     func previous(on player: DiscoveredPlayer) async throws
 
+    /// Seek within the current track. Seconds is clamped to [0, duration]
+    /// by the implementation; the speaker will refuse out-of-range seeks
+    /// for non-seekable streams (e.g. live radio).
+    func seek(toSeconds seconds: Int, on player: DiscoveredPlayer) async throws
+
     func playbackSnapshot(of player: DiscoveredPlayer) async throws -> PlaybackSnapshot
 
     // MARK: - Volume (RenderingControl service)

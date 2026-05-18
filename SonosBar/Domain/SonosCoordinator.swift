@@ -369,6 +369,11 @@ final class SonosCoordinator {
         await runOnSelectedCoordinator { try await self.transport.previous(on: $0) }
     }
 
+    func seek(toSeconds seconds: Int) async {
+        await runOnSelectedCoordinator { try await self.transport.seek(toSeconds: seconds, on: $0) }
+        await refreshSelectedGroup()
+    }
+
     // MARK: - Volume
 
     func setVolume(_ volume: Int) {
