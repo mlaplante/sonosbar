@@ -171,6 +171,15 @@ struct MenuBarRootView: View {
 
                 Spacer()
 
+                SettingsLink {
+                    Label("Settings…", systemImage: "gear")
+                        .labelStyle(.titleOnly)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(",", modifiers: [.command])
+
                 Button {
                     NSApplication.shared.terminate(nil)
                 } label: {
