@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for SonosBar (direct .dmg distribution).
+
+  Because we are NOT shipping through the Mac App Store, we are NOT sandboxed.
+  This is deliberate and is the whole reason we chose direct distribution:
+  SSDP multicast inside the App Store sandbox requires a specific
+  com.apple.developer.networking.multicast entitlement that Apple grants
+  by application only, and the review burden on Sonos-controlling apps is
+  measurable.
+
+  We DO use the Hardened Runtime, which is required for notarization.
+  Notarization is required for any app distributed outside the App Store
+  on modern macOS — without it, Gatekeeper will refuse to launch the app
+  unless the user right-clicks > Open.
+
+  Networking notes:
+    * No com.apple.security.app-sandbox key  -> not sandboxed.
+    * No com.apple.security.network.client/server keys needed when not
+      sandboxed; the hardened runtime alone permits networking.
+    * We DO add com.apple.security.network.client/server here anyway for
+      forward-compat: if we ever ship a sandboxed App Store build later,
+      these are the right starting points.
+
+  Microphone, camera, location, contacts, calendar, etc. are all NOT needed.
+  We resist the temptation to "just enable everything" — every extra
+  entitlement is something a security-minded user has to trust.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for notarization; allows the OS to verify the binary's
+         pages haven't been tampered with at runtime. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <false/>
+
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <false/>
+
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <false/>
+
+    <!-- Forward-compat for a possible future MAS build. Harmless on direct. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.network.server</key>
+    <true/>
+</dict>
+</plist>

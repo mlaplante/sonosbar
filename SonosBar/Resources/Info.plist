@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Info.plist for SonosBar
+
+  Two critical keys for a menu bar app:
+    * LSUIElement = true   -> No Dock icon, no app menu, no app-switcher entry.
+                              The app exists only as its menu bar item.
+    * LSMinimumSystemVersion = 26.0
+                           -> Hard-gated to Tahoe. SPM enforces this at build
+                              time too, but the plist is what the OS checks
+                              at launch.
+
+  We deliberately omit CFBundleDocumentTypes, NSMainStoryboardFile, and
+  NSPrincipalClass — none apply to a SwiftUI menu-bar-only app.
+
+  NSLocalNetworkUsageDescription appears in chunk 2 (when we start using the
+  Network framework for SSDP). NSBonjourServices may also appear there if we
+  add mDNS as a discovery fallback. Skipping them now keeps chunk 1 surface
+  area small; the app builds and runs without them.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <key>CFBundleExecutable</key>
+    <string>SonosBar</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>app.sonosbar.SonosBar</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>SonosBar</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>SonosBar</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+
+    <!-- The single most important key for this kind of app. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- High-resolution capable; standard for any modern Mac app. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Required to use multicast UDP / SSDP / GENA event listeners on
+         the local network. macOS Tahoe shows this string in the system
+         permission prompt the first time the app touches the LAN. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>SonosBar discovers and controls Sonos speakers on your local network.</string>
+
+    <!-- Bonjour services SonosBar may browse. Even though Sonos's primary
+         discovery is SSDP (multicast 239.255.255.250), some firmware paths
+         also advertise via mDNS — listing the service types here keeps
+         the system from blocking those probes silently. -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_sonos._tcp</string>
+        <string>_spotify-connect._tcp</string>
+    </array>
+
+    <!-- Sonos is a trademark of Sonos Inc. SonosBar is not affiliated with Sonos. -->
+    <key>NSHumanReadableCopyright</key>
+    <string>SonosBar is an independent project. Sonos is a trademark of Sonos Inc.</string>
+</dict>
+</plist>

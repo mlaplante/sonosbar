@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Swift / SPM build artifacts
+.build/
+.swiftpm/
+Package.resolved
+
+# Local .app bundle output from scripts/build-app.sh
+build/
+
+# Xcode user-specific
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+
+# DMG / notarization artifacts
+*.dmg
+*.zip
