@@ -587,6 +587,14 @@ private struct FavoritesList: View {
         }
     }
 
+    private var pinned: [SonosFavorite] {
+        filtered.filter { coordinator.settings.isPinned(favoriteURI: $0.uri) }
+    }
+
+    private var unpinned: [SonosFavorite] {
+        filtered.filter { !coordinator.settings.isPinned(favoriteURI: $0.uri) }
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             if coordinator.favoritesLoading && coordinator.favorites.isEmpty {
@@ -613,7 +621,16 @@ private struct FavoritesList: View {
 
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(filtered) { fav in
+                        if !pinned.isEmpty {
+                            ForEach(pinned) { fav in
+                                FavoriteRow(favorite: fav)
+                            }
+                            if !unpinned.isEmpty {
+                                Divider()
+                                    .padding(.vertical, 2)
+                            }
+                        }
+                        ForEach(unpinned) { fav in
                             FavoriteRow(favorite: fav)
                         }
                     }
@@ -627,7 +644,12 @@ private struct FavoritesList: View {
 private struct FavoriteRow: View {
 
     @Environment(SonosCoordinator.self) private var coordinator
+    @State private var hovering = false
     let favorite: SonosFavorite
+
+    private var isPinned: Bool {
+        coordinator.settings.isPinned(favoriteURI: favorite.uri)
+    }
 
     var body: some View {
         Button {
@@ -652,6 +674,20 @@ private struct FavoriteRow: View {
 
                 Spacer()
 
+                // Pin button: always visible when pinned (so the user
+                // can find the unpin affordance), hover-revealed when
+                // unpinned (to keep the unpinned list visually quiet).
+                if isPinned || hovering {
+                    Button {
+                        coordinator.settings.togglePinned(favoriteURI: favorite.uri)
+                    } label: {
+                        Image(systemName: isPinned ? "pin.fill" : "pin")
+                            .foregroundStyle(isPinned ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                    }
+                    .buttonStyle(.plain)
+                    .help(isPinned ? "Unpin" : "Pin to top")
+                }
+
                 Image(systemName: "play.circle")
                     .foregroundStyle(.tertiary)
             }
@@ -660,6 +696,7 @@ private struct FavoriteRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 
     private var artPlaceholder: some View {

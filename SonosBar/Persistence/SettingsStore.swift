@@ -82,6 +82,25 @@ final class SettingsStore {
         Self.defaults.set(lastKnownHosts, forKey: Key.lastKnownHosts)
     }
 
+    /// Set of favorite URIs the user has pinned to the top of the
+    /// Favorites tab. Persisted so pins survive relaunches. We key on
+    /// the URI (not title) because titles can drift if a service
+    /// renames a station.
+    private(set) var pinnedFavoriteURIs: Set<String>
+
+    func togglePinned(favoriteURI uri: String) {
+        if pinnedFavoriteURIs.contains(uri) {
+            pinnedFavoriteURIs.remove(uri)
+        } else {
+            pinnedFavoriteURIs.insert(uri)
+        }
+        Self.defaults.set(Array(pinnedFavoriteURIs), forKey: Key.pinnedFavoriteURIs)
+    }
+
+    func isPinned(favoriteURI uri: String) -> Bool {
+        pinnedFavoriteURIs.contains(uri)
+    }
+
     // MARK: - Init
 
     init() {
@@ -92,6 +111,8 @@ final class SettingsStore {
         self.rememberLastZone    = (Self.defaults.object(forKey: Key.rememberLastZone) as? Bool) ?? true
         self.lastSelectedGroupID = Self.defaults.string(forKey: Key.lastSelectedGroupID)
         self.lastKnownHosts      = (Self.defaults.dictionary(forKey: Key.lastKnownHosts) as? [String: String]) ?? [:]
+        let pinnedArray = (Self.defaults.array(forKey: Key.pinnedFavoriteURIs) as? [String]) ?? []
+        self.pinnedFavoriteURIs  = Set(pinnedArray)
     }
 
     private enum Key {
@@ -100,5 +121,6 @@ final class SettingsStore {
         static let rememberLastZone    = "settings.rememberLastZone"
         static let lastSelectedGroupID = "cache.lastSelectedGroupID"
         static let lastKnownHosts      = "cache.lastKnownHosts"
+        static let pinnedFavoriteURIs  = "settings.pinnedFavoriteURIs"
     }
 }
