@@ -160,39 +160,75 @@ struct MenuBarRootView: View {
 
             Divider()
 
-            HStack {
-                Button {
+            HStack(spacing: 4) {
+                FooterIconButton(
+                    systemImage: "arrow.clockwise",
+                    help: "Re-scan for speakers"
+                ) {
                     Task { await coordinator.refresh() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.plain)
-                .help("Re-scan for speakers")
 
                 Spacer()
 
+                Rectangle()
+                    .fill(.quaternary)
+                    .frame(width: 1, height: 14)
+                    .padding(.horizontal, 2)
+
                 SettingsLink {
-                    Label("Settings…", systemImage: "gear")
-                        .labelStyle(.titleOnly)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .regular))
+                        .frame(width: 26, height: 22)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(FooterIconButtonStyle())
+                .help("Settings")
                 .keyboardShortcut(",", modifiers: [.command])
 
-                Button {
+                FooterIconButton(
+                    systemImage: "power",
+                    help: "Quit SonosBar"
+                ) {
                     NSApplication.shared.terminate(nil)
-                } label: {
-                    Label("Quit", systemImage: "power")
-                        .labelStyle(.titleOnly)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
                 .keyboardShortcut("q", modifiers: [.command])
             }
         }
+    }
+}
+
+// MARK: - Footer buttons
+
+private struct FooterIconButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .regular))
+                .frame(width: 26, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(FooterIconButtonStyle())
+        .help(help)
+    }
+}
+
+private struct FooterIconButtonStyle: ButtonStyle {
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.secondary)
+            .background {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(.quaternary)
+                    .opacity(configuration.isPressed ? 0.9 : (hovering ? 0.55 : 0))
+            }
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
