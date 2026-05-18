@@ -303,6 +303,9 @@ final class SonosCoordinator {
             let (p, v) = try await (playbackTask, volumeTask)
             self.playback[group.id] = p
             self.volumes[group.id] = v
+            self.lastError = nil
+        } catch is CancellationError {
+            // Lifecycle cancellation — not a real failure.
         } catch let error as SonosError {
             self.lastError = error
         } catch {
@@ -491,7 +494,10 @@ final class SonosCoordinator {
               let coord = coordinator(of: group) else { return }
         do {
             try await transport.play(favorite: favorite, on: coord)
+            self.lastError = nil
             await refreshSelectedGroup()
+        } catch is CancellationError {
+            // Lifecycle cancellation — not a real failure.
         } catch let error as SonosError {
             self.lastError = error
         } catch {
@@ -507,6 +513,9 @@ final class SonosCoordinator {
               let coord = coordinator(of: group) else { return }
         do {
             try await body(coord)
+            self.lastError = nil
+        } catch is CancellationError {
+            // Lifecycle cancellation — not a real failure.
         } catch let error as SonosError {
             self.lastError = error
         } catch {

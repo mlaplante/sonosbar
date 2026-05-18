@@ -93,6 +93,12 @@ actor SOAPClient {
                 lastError = nil
                 break
             } catch {
+                // A cancellation is a lifecycle event, not a reachability
+                // problem — bail immediately so we don't retry three
+                // times and surface a misleading "unreachable: cancelled".
+                if (error as? URLError)?.code == .cancelled || error is CancellationError {
+                    throw CancellationError()
+                }
                 lastError = error
                 Log.transport.debug("SOAP attempt \(attempt) failed for \(action): \(error.localizedDescription)")
             }
