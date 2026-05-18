@@ -74,12 +74,33 @@ actor SOAPClient {
 
         Log.transport.debug("SOAP → \(player.zoneName) \(service.serviceType)#\(action)")
 
+        // Retry transient transport failures. Sonos speakers occasionally
+        // drop the first request (radio sleep, brief LAN hiccup) and
+        // recover on the next try a few hundred ms later. Three attempts
+        // with short backoff covers virtually every real-world flake
+        // without making genuine outages slow to surface.
         let data: Data
         let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw SonosError.unreachable(underlying: error.localizedDescription)
+        let backoffsMillis: [UInt64] = [0, 200, 600]
+        var lastError: (any Error)?
+        var attempt = 0
+        var fetched: (Data, URLResponse)?
+        for delay in backoffsMillis {
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay * 1_000_000) }
+            attempt += 1
+            do {
+                fetched = try await session.data(for: request)
+                lastError = nil
+                break
+            } catch {
+                lastError = error
+                Log.transport.debug("SOAP attempt \(attempt) failed for \(action): \(error.localizedDescription)")
+            }
+        }
+        if let f = fetched {
+            (data, response) = f
+        } else {
+            throw SonosError.unreachable(underlying: lastError?.localizedDescription ?? "unknown")
         }
 
         guard let http = response as? HTTPURLResponse else {
