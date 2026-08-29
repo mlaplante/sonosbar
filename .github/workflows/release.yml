@@ -17,7 +17,7 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: ver
@@ -52,7 +52,7 @@ jobs:
           ditto -c -k --keepParent SonosBar.app "SonosBar-${{ steps.ver.outputs.version }}.app.zip"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SonosBar-${{ steps.ver.outputs.version }}
           path: |
@@ -61,7 +61,7 @@ jobs:
 
       - name: Create GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: SonosBar ${{ steps.ver.outputs.version }}
           draft: false
