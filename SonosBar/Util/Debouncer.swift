@@ -3,12 +3,15 @@
 //  SonosBar
 //
 //  Coalesces high-frequency calls (volume slider drags, scroll events)
-//  into one trailing-edge invocation. Sonos rate-limits aggressively
-//  when you flood it with SetVolume — Menu Bar Controller's reviews
-//  document them hitting this and having to throttle.
+//  so Sonos doesn't get flooded with SetVolume — it rate-limits
+//  aggressively; Menu Bar Controller's reviews document them hitting
+//  this and having to throttle.
 //
-//  Behaviour: while events keep arriving, the action is deferred. Once
-//  `interval` passes without a new event, the most recent payload fires.
+//  Behaviour: a trailing THROTTLE, not a classic debounce. During
+//  sustained input the latest payload fires once per `interval` (so a
+//  volume drag is audible as it moves), and the final payload always
+//  fires within one interval of the last submit. It never fires more
+//  than once per interval, which is the property Sonos cares about.
 //
 //  Usage:
 //      let d = Debouncer<Int>(interval: .milliseconds(120))
@@ -30,7 +33,8 @@ actor Debouncer<Payload: Sendable> {
     }
 
     /// Stash the latest payload and schedule a fire. If a fire is already
-    /// scheduled it stays — only the payload it operates on changes.
+    /// scheduled it stays — only the payload it operates on changes. This
+    /// is what makes it a throttle: the deadline is never pushed back.
     func submit(_ payload: Payload, action: @escaping @Sendable (Payload) async -> Void) {
         pendingPayload = payload
         if firingTask == nil {

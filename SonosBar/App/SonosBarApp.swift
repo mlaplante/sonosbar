@@ -13,39 +13,18 @@ import AppKit
 struct SonosBarApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var coordinator = SonosCoordinator()
-    @State private var nowPlaying = NowPlayingBridge()
-    @State private var hotkeys = GlobalHotkeyManager()
 
+    // Discovery, subscriptions, hotkeys, and media-key handling start in
+    // AppDelegate.applicationDidFinishLaunching — NOT in a .task on the
+    // MenuBarExtra content view, which SwiftUI can lazily create only when
+    // the popover is first opened. The app must be live before any click.
     var body: some Scene {
         MenuBarExtra {
             MenuBarRootView()
-                .environment(coordinator)
-                .task {
-                    appDelegate.coordinator = coordinator
-                    appDelegate.nowPlaying = nowPlaying
-                    appDelegate.hotkeys = hotkeys
-
-                    nowPlaying.attach(to: coordinator)
-
-                    // Wire global hotkeys to the coordinator.
-                    hotkeys.install { action in
-                        Task { @MainActor in
-                            switch action {
-                            case .playPause:    await coordinator.togglePlayPause()
-                            case .nextTrack:    await coordinator.next()
-                            case .previousTrack: await coordinator.previous()
-                            case .volumeUp:     coordinator.nudgeVolume(by: +5)
-                            case .volumeDown:   coordinator.nudgeVolume(by: -5)
-                            }
-                        }
-                    }
-
-                    await coordinator.bootstrap()
-                }
+                .environment(appDelegate.coordinator)
         } label: {
             MenuBarLabel()
-                .environment(coordinator)
+                .environment(appDelegate.coordinator)
         }
         .menuBarExtraStyle(.window)
 
@@ -54,7 +33,7 @@ struct SonosBarApp: App {
         // agent apps.
         Settings {
             SettingsView()
-                .environment(coordinator)
+                .environment(appDelegate.coordinator)
         }
     }
 }
@@ -64,8 +43,13 @@ private struct MenuBarLabel: View {
     @Environment(SonosCoordinator.self) private var coordinator
 
     var body: some View {
-        Image(nsImage: SonosBarIcon.image(for: state))
-            .accessibilityLabel("SonosBar")
+        HStack(spacing: 4) {
+            Image(nsImage: SonosBarIcon.image(for: state))
+            if let title = menuBarTitle {
+                Text(title)
+            }
+        }
+        .accessibilityLabel("SonosBar")
     }
 
     private var state: SonosBarIcon.State {
@@ -73,6 +57,18 @@ private struct MenuBarLabel: View {
         let isPlaying = (coordinator.selectedGroup
             .flatMap { coordinator.playback[$0.id]?.state } ?? .stopped).isActive
         return isPlaying ? .playing : .idle
+    }
+
+    /// Track title beside the icon, when the user opted in and something
+    /// is actually playing. Trimmed hard — the menu bar is shared space.
+    private var menuBarTitle: String? {
+        guard coordinator.settings.showTitleInMenuBar,
+              let group = coordinator.selectedGroup,
+              let snapshot = coordinator.playback[group.id],
+              snapshot.state.isActive,
+              !snapshot.track.title.isEmpty else { return nil }
+        let title = snapshot.track.title
+        return title.count > 40 ? String(title.prefix(39)) + "…" : title
     }
 }
 
@@ -144,16 +140,35 @@ enum SonosBarIcon {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    var coordinator: SonosCoordinator?
-    var nowPlaying: NowPlayingBridge?
-    var hotkeys: GlobalHotkeyManager?
+    let coordinator = SonosCoordinator()
+    let nowPlaying = NowPlayingBridge()
+    let hotkeys = GlobalHotkeyManager()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        nowPlaying.attach(to: coordinator)
+
+        // Wire global hotkeys to the coordinator.
+        let coordinator = self.coordinator
+        hotkeys.install { action in
+            Task { @MainActor in
+                switch action {
+                case .playPause:     await coordinator.togglePlayPause()
+                case .nextTrack:     await coordinator.next()
+                case .previousTrack: await coordinator.previous()
+                case .volumeUp:      coordinator.nudgeVolume(by: +5)
+                case .volumeDown:    coordinator.nudgeVolume(by: -5)
+                }
+            }
+        }
+
+        Task { await coordinator.bootstrap() }
+    }
 
     private var hasRepliedToTerminate = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        nowPlaying?.detach()
-        hotkeys?.uninstall()
-        guard let coordinator else { return .terminateNow }
+        nowPlaying.detach()
+        hotkeys.uninstall()
 
         // Blocking the main thread here (DispatchGroup.wait) can never work:
         // shutdown() is main-actor and would need the very thread we'd be

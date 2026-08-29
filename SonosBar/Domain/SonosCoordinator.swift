@@ -67,6 +67,11 @@ final class SonosCoordinator {
 
     private var subscriptionIndex: [String: (uuid: String, topic: EventSubscription.Topic)] = [:]
     private var subscriptions: [EventSubscription] = []
+    /// Players that already hold av/rendering subscriptions, so
+    /// subscribeAll() can run again after discovery/topology changes
+    /// without duplicating subscriptions on already-covered speakers.
+    private var subscribedPlayerUUIDs: Set<String> = []
+    private var subscribedTopology = false
 
     private let volumeDebouncer = Debouncer<Int>(interval: .milliseconds(120))
     private var memberVolumeDebouncers: [String: Debouncer<Int>] = [:]
@@ -125,6 +130,10 @@ final class SonosCoordinator {
         let found = await discovery.search()
         ingestPlayers(found)
         await refreshTopology()
+        // Cover any speakers that appeared since bootstrap — without this,
+        // a speaker added mid-session never gets event subscriptions and
+        // its volume/playback state silently stops updating.
+        await subscribeAll()
         await refreshSelectedGroup()
     }
 
@@ -134,6 +143,8 @@ final class SonosCoordinator {
         for sub in subscriptions { await sub.unsubscribe() }
         subscriptions.removeAll()
         subscriptionIndex.removeAll()
+        subscribedPlayerUUIDs.removeAll()
+        subscribedTopology = false
         await eventServer.stop()
     }
 
@@ -197,8 +208,8 @@ final class SonosCoordinator {
 
         Log.events.info("Subscribing using callback http://\(callbackHost):\(callbackPort)/")
 
-        var subscribedTopology = false
-        for player in players.values {
+        for player in players.values where !subscribedPlayerUUIDs.contains(player.uuid) {
+            var covered = true
             for topic in [EventSubscription.Topic.avTransport, .renderingControl] {
                 let sub = EventSubscription(player: player, topic: topic, callbackPort: callbackPort)
                 do {
@@ -206,11 +217,15 @@ final class SonosCoordinator {
                     if let sid = await sub.sid {
                         subscriptionIndex[sid] = (player.uuid, topic)
                         subscriptions.append(sub)
+                    } else {
+                        covered = false
                     }
                 } catch {
+                    covered = false
                     Log.events.error("Subscribe \(topic.service.serviceType) failed on \(player.zoneName)")
                 }
             }
+            if covered { subscribedPlayerUUIDs.insert(player.uuid) }
             if !subscribedTopology {
                 let sub = EventSubscription(player: player, topic: .zoneGroupTopology, callbackPort: callbackPort)
                 do {
@@ -262,14 +277,29 @@ final class SonosCoordinator {
         var snap = playback[group.id] ?? PlaybackSnapshot()
         if let s = decoded.state { snap.state = s }
         if let uri = decoded.currentTrackURI, uri != snap.track.trackURI {
+            // The event usually carries the new track's DIDL. Apply it
+            // synchronously so the card doesn't flash the previous track's
+            // title/art while the SOAP round-trip below is in flight.
+            if let player = players[uuid],
+               var track = decoded.trackMetadata.flatMap({
+                   SOAPTransport.parseDIDLTrack(fromDIDL: $0, baseURL: player.baseURL)
+               }) {
+                track.trackURI = uri
+                snap.track = track
+            } else {
+                // No metadata in the event — showing nothing beats showing
+                // the previous track's fields against the new URI.
+                snap.track = TrackInfo()
+                snap.track.trackURI = uri
+            }
+            // Position (and duration for streams) never travels in the
+            // event; fetch the full snapshot to fill those in.
             if let player = players[uuid] {
                 Task { @MainActor in
                     if let snap2 = try? await self.transport.playbackSnapshot(of: player) {
                         self.playback[group.id] = snap2
                     }
                 }
-            } else {
-                snap.track.trackURI = uri
             }
         }
         playback[group.id] = snap
@@ -279,11 +309,31 @@ final class SonosCoordinator {
         guard let decoded = try? EventParser.zoneGroupTopology(from: body),
               let xml = decoded.zoneGroupStateXML,
               let root = try? XMLNode.parse(xml) else { return }
-        let newGroups = SOAPTransport.parseZoneGroupsForEvents(from: root)
+        let newGroups = SOAPTransport.parseZoneGroups(from: root)
         self.groups = newGroups
         if let sel = selectedGroupID, !newGroups.contains(where: { $0.id == sel }) {
             self.selectedGroupID = newGroups.first?.id
         }
+        await adoptNewMembers(from: newGroups)
+    }
+
+    /// Topology events can announce speakers we've never discovered (added
+    /// to the household mid-session). Probe them by the host the event
+    /// carries and bring them under event coverage.
+    private func adoptNewMembers(from groups: [ZoneGroup]) async {
+        let unknown = groups.flatMap(\.members)
+            .filter { players[$0.uuid] == nil && !$0.host.isEmpty }
+        guard !unknown.isEmpty else { return }
+
+        var discovered: [DiscoveredPlayer] = []
+        for member in unknown {
+            if let p = await Self.probe(host: member.host, expectedUUID: member.uuid, transport: transport) {
+                discovered.append(p)
+            }
+        }
+        guard !discovered.isEmpty else { return }
+        ingestPlayers(discovered)
+        await subscribeAll()
     }
 
     // MARK: - Polled refresh
@@ -322,14 +372,16 @@ final class SonosCoordinator {
     }
 
     private func ingestPlayers(_ found: [DiscoveredPlayer]) {
-        var map: [String: DiscoveredPlayer] = [:]
+        guard !found.isEmpty else { return }
+        // Merge rather than replace: a speaker that slept through one SSDP
+        // sweep would otherwise vanish from `players`, leaving its group's
+        // transport buttons silently dead until the next successful sweep.
+        var map = self.players
         for p in found {
             map[p.uuid] = p
             settings.recordHost(uuid: p.uuid, host: p.host)
         }
-        if !map.isEmpty {
-            self.players = map
-        }
+        self.players = map
     }
 
     // MARK: - Selection
@@ -531,8 +583,14 @@ final class SonosCoordinator {
     private func runOnSelectedCoordinator(
         _ body: @escaping @Sendable (DiscoveredPlayer) async throws -> Void
     ) async {
-        guard let group = selectedGroup,
-              let coord = coordinator(of: group) else { return }
+        guard let group = selectedGroup else { return }
+        guard let coord = coordinator(of: group) else {
+            // Known group but its coordinator isn't in `players` right now
+            // (asleep, mid-rediscovery). Surface it instead of silently
+            // ignoring the user's action.
+            self.lastError = .unreachable(underlying: "\(group.displayName) is not reachable right now")
+            return
+        }
         do {
             try await body(coord)
             self.lastError = nil
@@ -542,24 +600,6 @@ final class SonosCoordinator {
             self.lastError = error
         } catch {
             Log.domain.error("Transport action failed")
-        }
-    }
-}
-
-// MARK: - SOAPTransport extension for re-using parseZoneGroups on event payloads
-
-extension SOAPTransport {
-    static func parseZoneGroupsForEvents(from root: XMLNode) -> [ZoneGroup] {
-        return root.descendants(named: "ZoneGroup").compactMap { groupNode in
-            guard let coord = groupNode.attributes["Coordinator"],
-                  let groupID = groupNode.attributes["ID"] else { return nil }
-            let members: [ZoneGroupMember] = groupNode.all("ZoneGroupMember").compactMap { m in
-                guard let uuid = m.attributes["UUID"],
-                      let zone = m.attributes["ZoneName"] else { return nil }
-                let host = m.attributes["Location"].flatMap(URL.init(string:))?.host ?? ""
-                return ZoneGroupMember(uuid: uuid, zoneName: zone, host: host, isCoordinator: uuid == coord)
-            }
-            return ZoneGroup(id: groupID, coordinatorUUID: coord, members: members)
         }
     }
 }

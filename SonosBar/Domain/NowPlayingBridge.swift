@@ -31,6 +31,12 @@ final class NowPlayingBridge {
     private weak var coordinator: SonosCoordinator?
     private var observationTask: Task<Void, Never>?
 
+    /// Tokens returned by the closure-based addTarget. removeTarget(self)
+    /// only removes selector-registered targets, so these tokens are the
+    /// ONLY handle that can actually unregister a closure handler —
+    /// without them, re-attaching would stack duplicate dispatches.
+    private var commandTargets: [(MPRemoteCommand, Any)] = []
+
     /// Connect to the coordinator and start observing.
     func attach(to coordinator: SonosCoordinator) {
         self.coordinator = coordinator
@@ -41,55 +47,36 @@ final class NowPlayingBridge {
     func detach() {
         observationTask?.cancel()
         observationTask = nil
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.removeTarget(self)
-        center.pauseCommand.removeTarget(self)
-        center.togglePlayPauseCommand.removeTarget(self)
-        center.nextTrackCommand.removeTarget(self)
-        center.previousTrackCommand.removeTarget(self)
+        removeHandlers()
     }
 
     // MARK: - Remote command handlers
 
+    private func removeHandlers() {
+        for (command, token) in commandTargets {
+            command.removeTarget(token)
+        }
+        commandTargets.removeAll()
+    }
+
     private func registerHandlers() {
+        removeHandlers()
         let center = MPRemoteCommandCenter.shared()
 
-        // Removing-then-adding ensures a fresh handler — without this,
-        // re-attaching produces duplicate dispatches.
-        center.playCommand.removeTarget(self)
-        center.playCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { await self.coordinator?.play() }
-            return .success
+        func register(_ command: MPRemoteCommand, _ action: @escaping @MainActor () async -> Void) {
+            let token = command.addTarget { [weak self] _ in
+                guard self != nil else { return .commandFailed }
+                Task { @MainActor in await action() }
+                return .success
+            }
+            commandTargets.append((command, token))
         }
 
-        center.pauseCommand.removeTarget(self)
-        center.pauseCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { await self.coordinator?.pause() }
-            return .success
-        }
-
-        center.togglePlayPauseCommand.removeTarget(self)
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { await self.coordinator?.togglePlayPause() }
-            return .success
-        }
-
-        center.nextTrackCommand.removeTarget(self)
-        center.nextTrackCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { await self.coordinator?.next() }
-            return .success
-        }
-
-        center.previousTrackCommand.removeTarget(self)
-        center.previousTrackCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { await self.coordinator?.previous() }
-            return .success
-        }
+        register(center.playCommand) { [weak self] in await self?.coordinator?.play() }
+        register(center.pauseCommand) { [weak self] in await self?.coordinator?.pause() }
+        register(center.togglePlayPauseCommand) { [weak self] in await self?.coordinator?.togglePlayPause() }
+        register(center.nextTrackCommand) { [weak self] in await self?.coordinator?.next() }
+        register(center.previousTrackCommand) { [weak self] in await self?.coordinator?.previous() }
 
         // Enable all the commands we handle. Disabled commands won't
         // surface to the system UI.
@@ -168,24 +155,35 @@ final class NowPlayingBridge {
 
     private var lastArtURL: URL?
     private var lastArtwork: MPMediaItemArtwork?
+    private var inflightArtURL: URL?
 
     private func fetchAndApplyArtwork(url: URL, info: [String: Any]) {
         if url == lastArtURL, let art = lastArtwork {
             updateInfo(info, with: art)
             return
         }
+        // The 500ms publish loop calls this on every tick; without this
+        // guard a slow image spawns a new identical fetch per tick until
+        // the first one lands.
+        guard inflightArtURL != url else { return }
+        inflightArtURL = url
 
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.inflightArtURL == url { self.inflightArtURL = nil }
+            }
             guard let data = try? await URLSession.shared.data(from: url).0,
                   let image = NSImage(data: data) else { return }
 
             let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            await MainActor.run {
-                self.lastArtURL = url
-                self.lastArtwork = artwork
-                self.updateInfo(info, with: artwork)
-            }
+            self.lastArtURL = url
+            self.lastArtwork = artwork
+            // Re-publish from live coordinator state instead of applying the
+            // info dict captured when the fetch started — the track may have
+            // changed mid-fetch, and stamping the old dict would flash stale
+            // title/artist over the newer publish.
+            self.publishNowPlaying()
         }
     }
 

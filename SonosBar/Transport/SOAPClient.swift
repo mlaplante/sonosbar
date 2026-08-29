@@ -100,6 +100,15 @@ actor SOAPClient {
                     throw CancellationError()
                 }
                 lastError = error
+                // A timeout can mean the speaker executed the action and
+                // only the response was lost. For relative mutations a
+                // blind retry then double-fires (Next skips two tracks) —
+                // don't retry those. Connect-time failures and absolute
+                // setters stay retryable; that's the flake retry exists for.
+                if (error as? URLError)?.code == .timedOut,
+                   Self.nonIdempotentActions.contains(action) {
+                    break
+                }
                 Log.transport.debug("SOAP attempt \(attempt) failed for \(action): \(error.localizedDescription)")
             }
         }
@@ -136,6 +145,10 @@ actor SOAPClient {
             throw SonosError.malformedResponse(detail: "could not parse XML response")
         }
     }
+
+    /// Actions where re-sending after a timeout could visibly double-execute
+    /// (the request is relative to current state, not an absolute setter).
+    private static let nonIdempotentActions: Set<String> = ["Next", "Previous"]
 
     // MARK: - Envelope building
 

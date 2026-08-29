@@ -111,6 +111,13 @@ actor EventServer {
         wrapper.conn.cancel()
     }
 
+    /// Hard cap on one request's total size. Real NOTIFY bodies top out in
+    /// the tens of KB (ZoneGroupState is the biggest); anything larger —
+    /// a malformed Content-Length, or any LAN host feeding us garbage,
+    /// since nothing authenticates the sender — must not grow the buffer
+    /// forever.
+    private static let maxRequestBytes = 1 << 20
+
     /// Recursively read until we have a parseable request, then dispatch.
     /// `nonisolated` because the NWConnection callback runs off-actor.
     /// `buffer` is passed by value on each recursion to avoid capturing
@@ -121,6 +128,12 @@ actor EventServer {
 
             var buffer = accumulated
             if let data, !data.isEmpty { buffer.append(data) }
+
+            if buffer.count > Self.maxRequestBytes {
+                Log.events.error("Event request exceeded \(Self.maxRequestBytes) bytes; dropping connection")
+                conn.cancel()
+                return
+            }
 
             if let error {
                 Log.events.error("Event recv error: \(error.localizedDescription)")

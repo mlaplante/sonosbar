@@ -294,29 +294,41 @@ struct SOAPTransport: SonosTransport {
     // MARK: - Parsing helpers
 
     private static func parseTrack(from positionInfo: XMLNode, baseURL: URL) -> TrackInfo {
-        var track = TrackInfo()
         let body = positionInfo.descendants(named: "GetPositionInfoResponse").first ?? positionInfo
+
+        var track = body.first("TrackMetaData").flatMap {
+            parseDIDLTrack(fromDIDL: $0.trimmed, baseURL: baseURL)
+        } ?? TrackInfo()
 
         track.duration = parseDuration(body.first("TrackDuration")?.trimmed ?? "0:00:00")
         track.position = parseDuration(body.first("RelTime")?.trimmed ?? "0:00:00")
         track.trackURI = body.first("TrackURI")?.trimmed ?? ""
 
-        if let didl = body.first("TrackMetaData")?.trimmed,
-           !didl.isEmpty,
-           didl != "NOT_IMPLEMENTED",
-           let didlRoot = try? XMLNode.parse(didl),
-           let item = didlRoot.descendants(named: "item").first {
+        return track
+    }
 
-            track.title = item.first("title")?.trimmed
-                ?? item.descendants(named: "title").first?.trimmed ?? ""
-            track.artist = item.descendants(named: "creator").first?.trimmed ?? ""
-            track.album = item.descendants(named: "album").first?.trimmed ?? ""
+    /// Parses track metadata out of a DIDL-Lite document — the shape shared
+    /// by GetPositionInfo's TrackMetaData and the CurrentTrackMetaData field
+    /// of AVTransport GENA events. Duration comes from the res node's
+    /// attribute when present; position never travels in DIDL.
+    static func parseDIDLTrack(fromDIDL didl: String, baseURL: URL) -> TrackInfo? {
+        guard !didl.isEmpty,
+              didl != "NOT_IMPLEMENTED",
+              let didlRoot = try? XMLNode.parse(didl),
+              let item = didlRoot.descendants(named: "item").first else { return nil }
 
-            if let art = item.descendants(named: "albumArtURI").first?.trimmed, !art.isEmpty {
-                track.albumArtURL = URL(string: art, relativeTo: baseURL)?.absoluteURL
-            }
+        var track = TrackInfo()
+        track.title = item.first("title")?.trimmed
+            ?? item.descendants(named: "title").first?.trimmed ?? ""
+        track.artist = item.descendants(named: "creator").first?.trimmed ?? ""
+        track.album = item.descendants(named: "album").first?.trimmed ?? ""
+
+        if let art = item.descendants(named: "albumArtURI").first?.trimmed, !art.isEmpty {
+            track.albumArtURL = URL(string: art, relativeTo: baseURL)?.absoluteURL
         }
-
+        if let dur = item.first("res")?.attributes["duration"] {
+            track.duration = parseDuration(dur)
+        }
         return track
     }
 
@@ -330,7 +342,9 @@ struct SOAPTransport: SonosTransport {
         return total
     }
 
-    fileprivate static func parseZoneGroups(from root: XMLNode) -> [ZoneGroup] {
+    /// Internal (not fileprivate) so the coordinator can reuse it for
+    /// ZoneGroupTopology event payloads — same XML shape as GetZoneGroupState.
+    static func parseZoneGroups(from root: XMLNode) -> [ZoneGroup] {
         return root.descendants(named: "ZoneGroup").compactMap { groupNode in
             guard let coord = groupNode.attributes["Coordinator"],
                   let groupID = groupNode.attributes["ID"] else { return nil }
