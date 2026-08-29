@@ -576,14 +576,29 @@ final class SonosCoordinator {
     // MARK: - Favorites (chunk 9)
 
     func loadFavorites() async {
-        guard let player = players.values.first else { return }
+        // players.values.first is a random dictionary pick, and bonded
+        // satellites (stereo-pair/surround members) answer ContentDirectory
+        // Browse with a SOAP fault — verified on this household's Main
+        // Bedroom One SL pair. Prefer the selected group's coordinator,
+        // then try the rest until one answers.
+        var candidates: [DiscoveredPlayer] = []
+        if let group = selectedGroup, let coord = coordinator(of: group) {
+            candidates.append(coord)
+        }
+        candidates += players.values.filter { p in !candidates.contains(where: { $0.uuid == p.uuid }) }
+        guard !candidates.isEmpty else { return }
+
         favoritesLoading = true
         defer { favoritesLoading = false }
-        do {
-            favorites = try await transport.getFavorites(via: player)
-        } catch {
-            Log.domain.error("Favorites load failed")
+        for player in candidates {
+            do {
+                favorites = try await transport.getFavorites(via: player)
+                return
+            } catch {
+                Log.domain.error("Favorites load failed via \(player.zoneName); trying next player")
+            }
         }
+        Log.domain.error("Favorites load failed on every known player")
     }
 
     func play(favorite: SonosFavorite) async {
