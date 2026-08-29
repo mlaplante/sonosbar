@@ -513,6 +513,49 @@ final class SonosCoordinator {
         }
     }
 
+    // MARK: - Grouping
+
+    /// Pulls the zone identified by `memberUUID` into the selected group.
+    func joinSelectedGroup(memberUUID: String) async {
+        guard let group = selectedGroup else { return }
+        guard let player = players[memberUUID] else {
+            lastError = .unreachable(underlying: "That speaker is not reachable right now")
+            return
+        }
+        do {
+            try await transport.join(player: player, toCoordinatorUUID: group.coordinatorUUID)
+            lastError = nil
+        } catch is CancellationError {
+        } catch let error as SonosError {
+            lastError = error
+        } catch {
+            Log.domain.error("Join group failed")
+        }
+        // The GENA topology event usually lands within a couple of
+        // seconds; refresh explicitly so the checkmarks don't lag it.
+        await refreshTopology()
+    }
+
+    /// Splits the zone identified by `memberUUID` out of its group.
+    /// The group's coordinator can't be removed this way — the UI pins it.
+    func removeFromGroup(memberUUID: String) async {
+        guard memberUUID != selectedGroup?.coordinatorUUID else { return }
+        guard let player = players[memberUUID] else {
+            lastError = .unreachable(underlying: "That speaker is not reachable right now")
+            return
+        }
+        do {
+            try await transport.leaveGroup(player: player)
+            lastError = nil
+        } catch is CancellationError {
+        } catch let error as SonosError {
+            lastError = error
+        } catch {
+            Log.domain.error("Leave group failed")
+        }
+        await refreshTopology()
+    }
+
     // MARK: - Sleep timer (chunk 10)
 
     func setSleepTimer(minutes: Int) async {

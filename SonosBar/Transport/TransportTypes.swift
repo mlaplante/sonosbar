@@ -58,6 +58,10 @@ struct ZoneGroupMember: Sendable, Equatable, Hashable {
     let zoneName: String
     let host: String
     let isCoordinator: Bool
+    /// Bonded satellites (the second half of a stereo pair, surrounds,
+    /// subs) report Invisible="1". They move with their bonded partner
+    /// and must not be offered for grouping or per-speaker volume.
+    let isInvisible: Bool
 }
 
 /// A zone group — one coordinator plus zero or more secondary members.
@@ -67,13 +71,19 @@ struct ZoneGroup: Sendable, Equatable, Hashable {
     let coordinatorUUID: String
     let members: [ZoneGroupMember]
 
-    /// A friendly name. If there's one member, it's just that zone.
-    /// Otherwise it's "Kitchen + 2" style.
+    /// Members the user can see and act on — bonded satellites excluded.
+    var visibleMembers: [ZoneGroupMember] {
+        members.filter { !$0.isInvisible }
+    }
+
+    /// A friendly name. If there's one visible member, it's just that
+    /// zone. Otherwise it's "Kitchen + 2" style, counting visible zones
+    /// only — a stereo pair is one zone, not two.
     var displayName: String {
         guard let coord = members.first(where: { $0.uuid == coordinatorUUID }) else {
             return members.first?.zoneName ?? "Group"
         }
-        let others = members.count - 1
+        let others = visibleMembers.count(where: { $0.uuid != coordinatorUUID })
         return others > 0 ? "\(coord.zoneName) + \(others)" : coord.zoneName
     }
 }

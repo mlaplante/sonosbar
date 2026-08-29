@@ -48,6 +48,16 @@ protocol SonosTransport: Sendable {
 
     func getZoneGroups(via player: DiscoveredPlayer) async throws -> [ZoneGroup]
 
+    // MARK: - Grouping (AVTransport service)
+
+    /// Joins `player` (and its bonded satellites) to the group led by
+    /// `coordinatorUUID`. The player starts playing that group's audio.
+    func join(player: DiscoveredPlayer, toCoordinatorUUID coordinatorUUID: String) async throws
+
+    /// Removes `player` from its current group; it becomes a standalone
+    /// group of its own and stops playing the group's audio.
+    func leaveGroup(player: DiscoveredPlayer) async throws
+
     // MARK: - Favorites (ContentDirectory service) — chunk 9
 
     func getFavorites(via player: DiscoveredPlayer) async throws -> [SonosFavorite]

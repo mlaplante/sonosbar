@@ -161,6 +161,33 @@ struct SOAPTransport: SonosTransport {
         return Self.parseZoneGroups(from: stateRoot)
     }
 
+    // MARK: - Grouping
+
+    func join(player: DiscoveredPlayer, toCoordinatorUUID coordinatorUUID: String) async throws {
+        // Joining a group is "play the coordinator's stream": an
+        // x-rincon: URI naming the coordinator, no metadata. The joined
+        // player's bonded satellites follow automatically.
+        _ = try await client.send(
+            action: "SetAVTransportURI",
+            service: .avTransport,
+            arguments: [
+                ("InstanceID", "0"),
+                ("CurrentURI", "x-rincon:\(coordinatorUUID)"),
+                ("CurrentURIMetaData", "")
+            ],
+            to: player
+        )
+    }
+
+    func leaveGroup(player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "BecomeCoordinatorOfStandaloneGroup",
+            service: .avTransport,
+            arguments: [("InstanceID", "0")],
+            to: player
+        )
+    }
+
     // MARK: - Favorites (chunk 9)
     //
     // Favorites live in the ContentDirectory service at ObjectID "FV:2".
@@ -374,7 +401,13 @@ struct SOAPTransport: SonosTransport {
                 guard let uuid = m.attributes["UUID"],
                       let zone = m.attributes["ZoneName"] else { return nil }
                 let host = m.attributes["Location"].flatMap(URL.init(string:))?.host ?? ""
-                return ZoneGroupMember(uuid: uuid, zoneName: zone, host: host, isCoordinator: uuid == coord)
+                return ZoneGroupMember(
+                    uuid: uuid,
+                    zoneName: zone,
+                    host: host,
+                    isCoordinator: uuid == coord,
+                    isInvisible: m.attributes["Invisible"] == "1"
+                )
             }
             return ZoneGroup(id: groupID, coordinatorUUID: coord, members: members)
         }

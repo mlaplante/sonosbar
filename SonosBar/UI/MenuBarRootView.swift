@@ -38,6 +38,7 @@ struct MenuBarRootView: View {
 
     @State private var tab: Tab = .nowPlaying
     @State private var isZonePickerExpanded = false
+    @State private var isGroupEditExpanded = false
     @State private var isSpeakerListExpanded = false
     @State private var isSleepTimerExpanded = false
 
@@ -140,6 +141,7 @@ struct MenuBarRootView: View {
             VolumeRow()
             SpeakerList(group: group, isExpanded: $isSpeakerListExpanded)
             ZonePicker(isExpanded: $isZonePickerExpanded)
+            GroupEditRow(isExpanded: $isGroupEditExpanded)
             SleepTimerRow(isExpanded: $isSleepTimerExpanded)
         } else {
             noSpeakersView
@@ -490,7 +492,7 @@ private struct SpeakerList: View {
     var body: some View {
         // Only show the disclosure if the group has more than one member —
         // a solo speaker is already controlled by the main volume slider.
-        if group.members.count > 1 {
+        if group.visibleMembers.count > 1 {
             VStack(spacing: 4) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
@@ -514,7 +516,7 @@ private struct SpeakerList: View {
 
                 if isExpanded {
                     VStack(spacing: 6) {
-                        ForEach(group.members, id: \.uuid) { member in
+                        ForEach(group.visibleMembers, id: \.uuid) { member in
                             memberRow(member)
                         }
                     }
@@ -608,8 +610,8 @@ private struct ZonePicker: View {
                 Text(group.displayName)
                     .font(.callout)
                 Spacer()
-                if group.members.count > 1 {
-                    Text("\(group.members.count)")
+                if group.visibleMembers.count > 1 {
+                    Text("\(group.visibleMembers.count)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
@@ -622,6 +624,121 @@ private struct ZonePicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Group editor
+
+/// Join/leave controls for the selected group: every visible zone with a
+/// checkmark. Checked zones are in the group (tap to remove them);
+/// unchecked zones are elsewhere (tap to pull them in). The group's
+/// coordinator anchors the group and can't be removed here.
+private struct GroupEditRow: View {
+
+    @Environment(SonosCoordinator.self) private var coordinator
+    @Binding var isExpanded: Bool
+    @State private var busyUUIDs: Set<String> = []
+
+    private struct Candidate: Identifiable {
+        let member: ZoneGroupMember
+        let inSelectedGroup: Bool
+        let isAnchor: Bool
+        var id: String { member.uuid }
+    }
+
+    private var candidates: [Candidate] {
+        guard let selected = coordinator.selectedGroup else { return [] }
+        var rows = selected.visibleMembers.map {
+            Candidate(member: $0, inSelectedGroup: true, isAnchor: $0.uuid == selected.coordinatorUUID)
+        }
+        for group in coordinator.groups where group.id != selected.id {
+            rows += group.visibleMembers.map {
+                Candidate(member: $0, inSelectedGroup: false, isAnchor: false)
+            }
+        }
+        // Anchor first, then alphabetical — stable while checkmarks flip.
+        return rows.sorted {
+            ($0.isAnchor ? 0 : 1, $0.member.zoneName) < ($1.isAnchor ? 0 : 1, $1.member.zoneName)
+        }
+    }
+
+    var body: some View {
+        // With a single visible zone in the household there is nothing
+        // to join or remove.
+        if candidates.count > 1 {
+            VStack(spacing: 4) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                            .foregroundStyle(.secondary)
+                        Text("Edit group")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    VStack(spacing: 2) {
+                        ForEach(candidates) { candidate in
+                            candidateRow(candidate)
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+            }
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    @ViewBuilder
+    private func candidateRow(_ candidate: Candidate) -> some View {
+        let uuid = candidate.member.uuid
+        Button {
+            guard !busyUUIDs.contains(uuid) else { return }
+            busyUUIDs.insert(uuid)
+            Task {
+                if candidate.inSelectedGroup {
+                    await coordinator.removeFromGroup(memberUUID: uuid)
+                } else {
+                    await coordinator.joinSelectedGroup(memberUUID: uuid)
+                }
+                busyUUIDs.remove(uuid)
+            }
+        } label: {
+            HStack {
+                if busyUUIDs.contains(uuid) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 16)
+                } else {
+                    Image(systemName: candidate.inSelectedGroup ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(candidate.inSelectedGroup ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                }
+                Text(candidate.member.zoneName)
+                    .font(.callout)
+                Spacer()
+                if candidate.isAnchor {
+                    Text("this group")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(candidate.isAnchor)
     }
 }
 
