@@ -185,9 +185,8 @@ final class NowPlayingBridge {
                 if self.inflightArtURL == url { self.inflightArtURL = nil }
             }
             guard let data = try? await URLSession.shared.data(from: url).0,
-                  let image = NSImage(data: data) else { return }
+                  let artwork = await Self.makeArtwork(from: data) else { return }
 
-            let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             self.lastArtURL = url
             self.lastArtwork = artwork
             // Re-publish from live coordinator state instead of applying the
@@ -196,6 +195,19 @@ final class NowPlayingBridge {
             // title/artist over the newer publish.
             self.publishNowPlaying()
         }
+    }
+
+    /// MUST stay nonisolated: MediaPlayer invokes the artwork request
+    /// handler on its own serial queue when it serializes now-playing info
+    /// (jpegDataWithSize:). A closure formed in a @MainActor context
+    /// inherits main-actor isolation, and the runtime's isolation check
+    /// then crashes the app the moment MediaPlayer calls it off-main —
+    /// verified from a real crash report, not hypothetical. Building the
+    /// closure here keeps it nonisolated. NSImage is documented
+    /// thread-safe for this kind of read-only use.
+    private nonisolated static func makeArtwork(from data: Data) async -> MPMediaItemArtwork? {
+        guard let image = NSImage(data: data) else { return nil }
+        return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
     }
 
     private func updateInfo(_ info: [String: Any], with artwork: MPMediaItemArtwork) {
