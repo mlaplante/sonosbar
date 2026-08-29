@@ -148,16 +148,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var nowPlaying: NowPlayingBridge?
     var hotkeys: GlobalHotkeyManager?
 
-    func applicationWillTerminate(_ notification: Notification) {
+    private var hasRepliedToTerminate = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         nowPlaying?.detach()
         hotkeys?.uninstall()
-        guard let coordinator else { return }
-        let group = DispatchGroup()
-        group.enter()
+        guard let coordinator else { return .terminateNow }
+
+        // Blocking the main thread here (DispatchGroup.wait) can never work:
+        // shutdown() is main-actor and would need the very thread we'd be
+        // blocking, so the speakers were left holding live GENA subscriptions
+        // to a dead callback port. .terminateLater lets shutdown() actually
+        // run; a watchdog caps quit latency if a speaker hangs.
         Task { @MainActor in
             await coordinator.shutdown()
-            group.leave()
+            self.replyToTerminateOnce(sender)
         }
-        _ = group.wait(timeout: .now() + 2)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            self.replyToTerminateOnce(sender)
+        }
+        return .terminateLater
+    }
+
+    private func replyToTerminateOnce(_ app: NSApplication) {
+        guard !hasRepliedToTerminate else { return }
+        hasRepliedToTerminate = true
+        app.reply(toApplicationShouldTerminate: true)
     }
 }

@@ -44,8 +44,15 @@ final class SonosCoordinator {
     private(set) var memberVolumes: [String: VolumeSnapshot] = [:]
 
     // MARK: - Sleep timer state (chunk 10)
+    /// Remaining sleep-timer seconds keyed by group ID. Keyed per group so
+    /// switching the popover to another zone neither shows nor clobbers a
+    /// timer that belongs to a different group.
+    private(set) var sleepTimers: [String: Int] = [:]
+
     /// Remaining sleep-timer seconds for the selected group. 0 = inactive.
-    private(set) var sleepTimerRemaining: Int = 0
+    var sleepTimerRemaining: Int {
+        selectedGroupID.flatMap { sleepTimers[$0] } ?? 0
+    }
 
     // MARK: - Favorites (chunk 9)
     private(set) var favorites: [SonosFavorite] = []
@@ -63,7 +70,7 @@ final class SonosCoordinator {
 
     private let volumeDebouncer = Debouncer<Int>(interval: .milliseconds(120))
     private var memberVolumeDebouncers: [String: Debouncer<Int>] = [:]
-    private var sleepTimerPollTask: Task<Void, Never>?
+    private var sleepTimerPollTasks: [String: Task<Void, Never>] = [:]
 
     init(
         discovery: SSDPDiscovery = SSDPDiscovery(),
@@ -122,7 +129,8 @@ final class SonosCoordinator {
     }
 
     func shutdown() async {
-        sleepTimerPollTask?.cancel()
+        for task in sleepTimerPollTasks.values { task.cancel() }
+        sleepTimerPollTasks.removeAll()
         for sub in subscriptions { await sub.unsubscribe() }
         subscriptions.removeAll()
         subscriptionIndex.removeAll()
@@ -437,8 +445,8 @@ final class SonosCoordinator {
               let coord = coordinator(of: group) else { return }
         do {
             try await transport.setSleepTimer(seconds: minutes * 60, on: coord)
-            sleepTimerRemaining = minutes * 60
-            startSleepTimerPolling()
+            sleepTimers[group.id] = minutes * 60
+            startSleepTimerPolling(groupID: group.id)
         } catch {
             Log.domain.error("setSleepTimer failed")
         }
@@ -449,31 +457,45 @@ final class SonosCoordinator {
               let coord = coordinator(of: group) else { return }
         do {
             try await transport.setSleepTimer(seconds: 0, on: coord)
-            sleepTimerRemaining = 0
-            sleepTimerPollTask?.cancel()
-            sleepTimerPollTask = nil
+            stopSleepTimerTracking(groupID: group.id)
         } catch {
             Log.domain.error("clearSleepTimer failed")
         }
     }
 
-    private func startSleepTimerPolling() {
-        sleepTimerPollTask?.cancel()
-        sleepTimerPollTask = Task { @MainActor [weak self] in
+    /// Polls the group the timer was set on — not the live selection, which
+    /// the user is free to change while the timer runs.
+    private func startSleepTimerPolling(groupID: String) {
+        sleepTimerPollTasks[groupID]?.cancel()
+        sleepTimerPollTasks[groupID] = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
-                guard let group = self.selectedGroup,
-                      let coord = self.coordinator(of: group) else { return }
+                guard let group = self.groups.first(where: { $0.id == groupID }) else {
+                    // The group re-formed or vanished — its ID (and the timer
+                    // tracked under it) no longer exists.
+                    self.stopSleepTimerTracking(groupID: groupID)
+                    return
+                }
+                guard let coord = self.coordinator(of: group) else {
+                    // Coordinator temporarily undiscovered — try again next tick.
+                    continue
+                }
                 if let remaining = try? await self.transport.getSleepTimerRemaining(on: coord) {
-                    self.sleepTimerRemaining = remaining
+                    self.sleepTimers[groupID] = remaining
                     if remaining == 0 {
-                        self.sleepTimerPollTask?.cancel()
-                        self.sleepTimerPollTask = nil
+                        self.stopSleepTimerTracking(groupID: groupID)
+                        return
                     }
                 }
             }
         }
+    }
+
+    private func stopSleepTimerTracking(groupID: String) {
+        sleepTimers[groupID] = nil
+        sleepTimerPollTasks[groupID]?.cancel()
+        sleepTimerPollTasks[groupID] = nil
     }
 
     // MARK: - Favorites (chunk 9)

@@ -165,6 +165,18 @@ actor EventSubscription {
                 cont.resume(with: result)
             }
 
+            // NWConnection has no request deadline of its own, and a speaker
+            // that accepts the TCP connection but never answers the SUBSCRIBE
+            // would otherwise park this continuation forever — stalling the
+            // whole sequential subscribeAll() chain in the coordinator.
+            // Deliberately no retry here: blindly re-sending SUBSCRIBE can
+            // duplicate subscriptions on the speaker; renewal/re-subscribe
+            // logic above owns recovery.
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                resume(.failure(SonosError.unreachable(underlying: "GENA request timed out")))
+            }
+
             conn.stateUpdateHandler = { connState in
                 switch connState {
                 case .ready:
@@ -183,6 +195,11 @@ actor EventSubscription {
                         }
                     })
                 case .failed(let err):
+                    resume(.failure(err))
+                case .waiting(let err):
+                    // .waiting means the connection attempt was refused or has
+                    // no route and NWConnection would keep retrying internally.
+                    // For a one-shot LAN request, fail fast instead.
                     resume(.failure(err))
                 case .cancelled:
                     resume(.failure(SonosError.unreachable(underlying: "connection cancelled")))
