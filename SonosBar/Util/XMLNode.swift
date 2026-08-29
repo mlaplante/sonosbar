@@ -19,6 +19,11 @@ import Foundation
 final class XMLNode: @unchecked Sendable {
 
     let name: String
+    /// Name without any namespace prefix. Sonos DIDL-Lite and SOAP bodies
+    /// mix prefixed elements (upnp:albumArtURI, dc:title, r:resMD,
+    /// u:GetPositionInfoResponse) with unprefixed ones; lookups match on
+    /// the local part so callers can use the bare name for both.
+    let localName: String
     var attributes: [String: String]
     var children: [XMLNode] = []
     weak var parent: XMLNode?
@@ -30,26 +35,35 @@ final class XMLNode: @unchecked Sendable {
 
     init(name: String, attributes: [String: String] = [:]) {
         self.name = name
+        if let colon = name.lastIndex(of: ":") {
+            self.localName = String(name[name.index(after: colon)...])
+        } else {
+            self.localName = name
+        }
         self.attributes = attributes
     }
 
     // MARK: - Convenience traversal
 
-    /// First direct child with the given name.
-    func first(_ name: String) -> XMLNode? {
-        children.first { $0.name == name }
+    private func matches(_ name: String) -> Bool {
+        localName == name || self.name == name
     }
 
-    /// All direct children with the given name.
+    /// First direct child with the given name (prefix-insensitive).
+    func first(_ name: String) -> XMLNode? {
+        children.first { $0.matches(name) }
+    }
+
+    /// All direct children with the given name (prefix-insensitive).
     func all(_ name: String) -> [XMLNode] {
-        children.filter { $0.name == name }
+        children.filter { $0.matches(name) }
     }
 
     /// Depth-first descendants matching the name (any depth below self).
     func descendants(named name: String) -> [XMLNode] {
         var result: [XMLNode] = []
         for child in children {
-            if child.name == name { result.append(child) }
+            if child.matches(name) { result.append(child) }
             result.append(contentsOf: child.descendants(named: name))
         }
         return result
