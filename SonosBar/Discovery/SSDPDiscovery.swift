@@ -196,7 +196,10 @@ actor SSDPDiscovery {
             Log.discovery.debug("Skipping LOCATION with no host/port: \(url)")
             return nil
         }
-        let descURL = URL(string: "http://\(host):\(port)/xml/device_description.xml")!
+        guard let descURL = NetHost.httpURL(host: host, port: port, path: "/xml/device_description.xml") else {
+            Log.discovery.debug("Skipping LOCATION with unusable host: \(url)")
+            return nil
+        }
 
         do {
             // 2-second timeout per device. If a speaker is on the LAN but

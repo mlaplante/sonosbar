@@ -150,44 +150,67 @@ final class SonosCoordinator {
 
     /// Tries cached IPs in parallel; returns only those that respond.
     /// Cheaper than waiting for SSDP timeout on networks where multicast is iffy.
+    /// A cached IP that answers as some *other* device (DHCP handed it to
+    /// somebody else, speaker retired) is forgotten so the cache doesn't
+    /// accumulate stale entries forever; one that simply doesn't answer is
+    /// kept — the speaker may just be powered off today.
     private func preflightCachedHosts() async -> [DiscoveredPlayer] {
         let hosts = settings.lastKnownHosts
         guard !hosts.isEmpty else { return [] }
 
-        return await withTaskGroup(of: DiscoveredPlayer?.self) { group in
+        let outcomes = await withTaskGroup(of: (String, ProbeOutcome).self) { group in
             for (uuid, host) in hosts {
-                group.addTask { [transport] in
+                group.addTask {
                     // We don't have the full DiscoveredPlayer from cache —
                     // do a quick description fetch to validate it's still
                     // there and refresh its metadata.
-                    return await Self.probe(host: host, expectedUUID: uuid, transport: transport)
+                    return (uuid, await Self.probe(host: host, expectedUUID: uuid))
                 }
             }
-            var found: [DiscoveredPlayer] = []
-            for await p in group { if let p { found.append(p) } }
-            return found
+            var collected: [(String, ProbeOutcome)] = []
+            for await entry in group { collected.append(entry) }
+            return collected
         }
+
+        var found: [DiscoveredPlayer] = []
+        for (uuid, outcome) in outcomes {
+            switch outcome {
+            case .found(let player): found.append(player)
+            case .mismatch:          settings.forgetHost(uuid: uuid)
+            case .unreachable:       break
+            }
+        }
+        return found
     }
 
-    private static func probe(host: String, expectedUUID: String, transport: any SonosTransport) async -> DiscoveredPlayer? {
-        // Reuse the SSDP description parser by constructing the URL directly.
-        let url = URL(string: "http://\(host):1400/xml/device_description.xml")!
+    private enum ProbeOutcome: Sendable {
+        case found(DiscoveredPlayer)
+        /// Something answered, but it isn't the expected speaker.
+        case mismatch
+        /// Nothing answered — offline, not necessarily gone.
+        case unreachable
+    }
+
+    private static func probe(host: String, expectedUUID: String) async -> ProbeOutcome {
+        guard let url = NetHost.httpURL(host: host, port: 1400, path: "/xml/device_description.xml") else {
+            return .mismatch
+        }
         var request = URLRequest(url: url, timeoutInterval: 1.5)
         request.httpMethod = "GET"
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
-            let root = try XMLNode.parse(data)
-            guard let device = root.descendants(named: "device").first,
-                  let udn = device.first("UDN")?.trimmed else { return nil }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let root = try? XMLNode.parse(data),
+                  let device = root.descendants(named: "device").first,
+                  let udn = device.first("UDN")?.trimmed else { return .mismatch }
             let uuid = udn.hasPrefix("uuid:") ? String(udn.dropFirst("uuid:".count)) : udn
-            guard uuid == expectedUUID else { return nil }
+            guard uuid == expectedUUID else { return .mismatch }
             let model = device.first("modelName")?.trimmed ?? "Sonos"
             let zoneName = device.first("roomName")?.trimmed ?? "Unnamed"
             let household = device.first("householdId")?.trimmed
-            return DiscoveredPlayer(uuid: uuid, host: host, port: 1400, model: model, zoneName: zoneName, household: household)
+            return .found(DiscoveredPlayer(uuid: uuid, host: host, port: 1400, model: model, zoneName: zoneName, household: household))
         } catch {
-            return nil
+            return .unreachable
         }
     }
 
@@ -327,7 +350,7 @@ final class SonosCoordinator {
 
         var discovered: [DiscoveredPlayer] = []
         for member in unknown {
-            if let p = await Self.probe(host: member.host, expectedUUID: member.uuid, transport: transport) {
+            if case .found(let p) = await Self.probe(host: member.host, expectedUUID: member.uuid) {
                 discovered.append(p)
             }
         }

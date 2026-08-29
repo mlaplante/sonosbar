@@ -82,16 +82,4 @@ enum LocalAddress {
         }
     }
 
-    /// Thread-safe once-only flag for resuming a continuation from
-    /// multiple state-change paths in a callback-based API.
-    private final class ResumeFlag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var resumed = false
-        func tryResume() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            guard !resumed else { return false }
-            resumed = true
-            return true
-        }
-    }
 }

@@ -35,8 +35,9 @@ struct DiscoveredPlayer: Hashable, Sendable {
 
     /// Base URL for SOAP control and device description.
     var baseURL: URL {
-        // Force-unwrap is safe: host comes from a parsed URL response;
-        // port is a constant; scheme is hardcoded.
-        URL(string: "http://\(host):\(port)")!
+        // URLComponents brackets IPv6 hosts itself, so this succeeds for
+        // any host discovery can hand us; the literal fallback exists only
+        // to keep this non-optional without a force-unwrap on input data.
+        NetHost.httpURL(host: host, port: port) ?? URL(string: "http://127.0.0.1:1400")!
     }
 }

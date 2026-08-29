@@ -172,27 +172,45 @@ struct SOAPTransport: SonosTransport {
     // favorites (Spotify playlists, Apple Music albums) without it.
 
     func getFavorites(via player: DiscoveredPlayer) async throws -> [SonosFavorite] {
-        let response = try await client.send(
-            action: "Browse",
-            service: .contentDirectory,
-            arguments: [
-                ("ObjectID", "FV:2"),
-                ("BrowseFlag", "BrowseDirectChildren"),
-                ("Filter", "*"),
-                ("StartingIndex", "0"),
-                ("RequestedCount", "1000"),
-                ("SortCriteria", "")
-            ],
-            to: player
-        )
+        var favorites: [SonosFavorite] = []
+        var startingIndex = 0
+        let pageSize = 200
 
-        // The <Result> element is escaped DIDL-Lite XML.
-        guard let didlText = response.descendants(named: "Result").first?.trimmed,
-              !didlText.isEmpty else {
-            return []
+        // Page until TotalMatches is exhausted; the fixed iteration bound
+        // (25 pages / 5000 favorites) only guards against a firmware bug
+        // reporting inconsistent counts.
+        for _ in 0..<25 {
+            let response = try await client.send(
+                action: "Browse",
+                service: .contentDirectory,
+                arguments: [
+                    ("ObjectID", "FV:2"),
+                    ("BrowseFlag", "BrowseDirectChildren"),
+                    ("Filter", "*"),
+                    ("StartingIndex", "\(startingIndex)"),
+                    ("RequestedCount", "\(pageSize)"),
+                    ("SortCriteria", "")
+                ],
+                to: player
+            )
+
+            // The <Result> element is escaped DIDL-Lite XML.
+            guard let didlText = response.descendants(named: "Result").first?.trimmed,
+                  !didlText.isEmpty else {
+                break
+            }
+            let didl = try XMLNode.parse(didlText)
+            favorites += Self.parseFavorites(from: didl, player: player)
+
+            let returned = Int(response.descendants(named: "NumberReturned").first?.trimmed ?? "0") ?? 0
+            let total = Int(response.descendants(named: "TotalMatches").first?.trimmed ?? "0") ?? 0
+            startingIndex += returned
+            if returned == 0 || startingIndex >= total { break }
         }
-        let didl = try XMLNode.parse(didlText)
+        return favorites
+    }
 
+    private static func parseFavorites(from didl: XMLNode, player: DiscoveredPlayer) -> [SonosFavorite] {
         return didl.descendants(named: "item").compactMap { item -> SonosFavorite? in
             let title = item.descendants(named: "title").first?.trimmed ?? ""
 
@@ -294,7 +312,11 @@ struct SOAPTransport: SonosTransport {
     // MARK: - Parsing helpers
 
     private static func parseTrack(from positionInfo: XMLNode, baseURL: URL) -> TrackInfo {
-        let body = positionInfo.descendants(named: "GetPositionInfoResponse").first ?? positionInfo
+        // No fallback to the envelope root: the fields below are direct
+        // children of the response element, so nothing could be found there.
+        guard let body = positionInfo.descendants(named: "GetPositionInfoResponse").first else {
+            return TrackInfo()
+        }
 
         var track = body.first("TrackMetaData").flatMap {
             parseDIDLTrack(fromDIDL: $0.trimmed, baseURL: baseURL)

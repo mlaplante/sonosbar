@@ -131,6 +131,11 @@ struct MenuBarRootView: View {
         if let group = coordinator.selectedGroup {
             NowPlayingCard(group: group)
             ScrubberRow(group: group)
+                // New identity per zone: the scrubber keeps local @State
+                // (extrapolated position) that must not survive a switch —
+                // without this the old zone's position shows for up to a
+                // second until the next timer tick resyncs.
+                .id(group.id)
             TransportRow()
             VolumeRow()
             SpeakerList(group: group, isExpanded: $isSpeakerListExpanded)

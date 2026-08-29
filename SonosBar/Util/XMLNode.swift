@@ -24,14 +24,17 @@ final class XMLNode: @unchecked Sendable {
     /// u:GetPositionInfoResponse) with unprefixed ones; lookups match on
     /// the local part so callers can use the bare name for both.
     let localName: String
-    var attributes: [String: String]
-    var children: [XMLNode] = []
-    weak var parent: XMLNode?
+    let attributes: [String: String]
+    // Setters are private: a parsed tree is immutable to consumers, which
+    // is what makes the @unchecked Sendable above sound. Only the SAX
+    // delegate below builds nodes up during parse.
+    private(set) var children: [XMLNode] = []
+    private(set) weak var parent: XMLNode?
 
     // Concatenated text content for this node. Stored as a single string
     // because Sonos responses never mix elements and significant text at
     // the same level — text is either everything or nothing in a node.
-    var text: String = ""
+    private(set) var text: String = ""
 
     init(name: String, attributes: [String: String] = [:]) {
         self.name = name

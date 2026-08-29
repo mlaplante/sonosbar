@@ -123,7 +123,7 @@ actor EventSubscription {
         if let renewSID {
             request += "SID: \(renewSID)\r\n"
         } else {
-            request += "CALLBACK: <http://\(callbackHost):\(callbackPort)/>\r\n"
+            request += "CALLBACK: <http://\(NetHost.bracketed(callbackHost)):\(callbackPort)/>\r\n"
             request += "NT: upnp:event\r\n"
         }
         // We ask for 30 minutes; the speaker may shorten this.
@@ -153,10 +153,10 @@ actor EventSubscription {
         )
         let conn = NWConnection(to: endpoint, using: .tcp)
 
-        // ResumeState wraps the once-only continuation completion in a
+        // ResumeFlag wraps the once-only continuation completion in a
         // reference type so the @Sendable closures from NWConnection can
-        // safely share access. The internal lock protects didResume.
-        let state = ResumeState()
+        // safely share access.
+        let state = ResumeFlag()
 
         return try await withCheckedThrowingContinuation { cont in
             @Sendable func resume(_ result: Result<String, Error>) {
@@ -208,18 +208,6 @@ actor EventSubscription {
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
-        }
-    }
-
-    /// Thread-safe once-only flag for continuation resumption.
-    private final class ResumeState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var resumed = false
-        func tryResume() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            guard !resumed else { return false }
-            resumed = true
-            return true
         }
     }
 
