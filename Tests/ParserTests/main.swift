@@ -308,6 +308,16 @@ expect(UpdateChecker.evaluate(manifestBytes: Data("{}".utf8),
                               currentVersion: "0.5.1") == nil,
        "evaluate rejects signature/content mismatch")
 
+// A signed-but-undecodable manifest must not look like "verified current":
+// evaluate returns nil for it AND for a genuinely-current one — the
+// distinction (fallback vs quiet success) lives in checkSignedFeed's
+// decode+version re-check, exercised here via its components.
+let signedGarbage = Data("{\"garbage\":true}".utf8)
+let garbageSig = (try? sigTestKey.signature(for: signedGarbage))?.base64EncodedString() ?? ""
+expect(UpdateSignature.verify(manifestBytes: signedGarbage, signatureBase64: garbageSig, publicKeyBase64: sigTestPub)
+       && (try? UpdateManifest.decode(signedGarbage)) == nil,
+       "signed garbage verifies but does not decode (must fall back, not go quiet)")
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")

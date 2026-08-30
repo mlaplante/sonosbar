@@ -95,10 +95,14 @@ final class UpdateChecker {
                                            currentVersion: currentVersion)
         else {
             // Verified-and-current is also a successful outcome: an older
-            // or equal signed manifest means there IS no update.
+            // or equal signed manifest means there IS no update. But a
+            // signed manifest that fails strict decoding is a failure —
+            // fall back to the legacy path rather than silently going dark.
             if UpdateSignature.verify(manifestBytes: manifestBytes,
                                       signatureBase64: signature,
-                                      publicKeyBase64: publicKey) {
+                                      publicKeyBase64: publicKey),
+               let current = try? UpdateManifest.decode(manifestBytes),
+               !Self.version(current.version, isNewerThan: currentVersion) {
                 verifiedManifest = nil
                 latestVersion = nil
                 return true
