@@ -11,6 +11,14 @@
 # QUIRK: uses the app's real bundle id defaults domain; restores the
 # debug keys afterwards.
 #
+# PREREQUISITE: quit the user's real SonosBar (from /Applications) before
+# running this. It shares the bundle id app.sonosbar.SonosBar with the
+# temp copy this script launches — with the real app already running,
+# `open` on the temp copy just activates the real one instead of
+# starting a second process, which silently produces a spurious
+# 60s-timeout FAIL with nothing actually tested. Restart the real app
+# afterwards; this script does not do that for you.
+#
 # Modes:
 #   * Default (Xcode present): builds v98 and v99 from the current tree
 #     via scripts/build-app.sh, mutating and restoring the repo's
@@ -48,6 +56,18 @@ cleanup() {
     pkill -f "http.server $PORT" 2>/dev/null || true
     defaults delete app.sonosbar.SonosBar debug.updateFeedURL 2>/dev/null || true
     defaults delete app.sonosbar.SonosBar debug.updateAutoInstall 2>/dev/null || true
+    # Restore the tree's plist. Lives in the trap (not just inline after
+    # the builds) so a set -e abort mid-run — build failure, missing
+    # tool, anything — still restores the tree instead of leaving it
+    # stamped 98.0.0/99.0.0 with a throwaway SBUpdatePublicKey whose
+    # private half is already gone (committing that would ship an app
+    # that can never verify a future update). Guarded for both mode
+    # (prebuilt never touches the tree) and unset-var safety (an abort
+    # before ORIG_VER is captured must not write an empty version).
+    if [ -z "${E2E_PREBUILT_APP:-}" ] && [ -n "${ORIG_VER:-}" ]; then
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ORIG_VER" "$ROOT/SonosBar/Resources/Info.plist"
+        /usr/libexec/PlistBuddy -c "Set :SBUpdatePublicKey " "$ROOT/SonosBar/Resources/Info.plist"
+    fi
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -89,11 +109,8 @@ else
 fi
 build_version 98.0.0 "$WORK/old"
 build_version 99.0.0 "$WORK/new"
-if [ -z "${E2E_PREBUILT_APP:-}" ]; then
-    # Restore the tree's plist.
-    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ORIG_VER" "$ROOT/SonosBar/Resources/Info.plist"
-    /usr/libexec/PlistBuddy -c "Set :SBUpdatePublicKey " "$ROOT/SonosBar/Resources/Info.plist"
-fi
+# Restore happens in the cleanup trap (see above) so it still runs on
+# a mid-run abort, not just on this successful path.
 
 echo "==> Signed manifest for v99"
 mkdir -p "$WORK/serve"
@@ -105,6 +122,12 @@ UPDATE_ED_PRIVATE_KEY="$PRIV" swift "$ROOT/scripts/sign-update.swift" "$WORK/ser
 
 echo "==> Serving feed on :$PORT; installing v98"
 (cd "$WORK/serve" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &)
+# Bounded wait: python needs a beat to bind before it'll answer.
+for _ in $(seq 1 40); do
+    curl -fsS "http://127.0.0.1:$PORT/appcast.json" >/dev/null 2>&1 && break
+    sleep 0.25
+done
+curl -fsS "http://127.0.0.1:$PORT/appcast.json" >/dev/null || { echo "server failed to start"; exit 1; }
 mkdir -p "$WORK/install"
 ditto "$WORK/old/SonosBar.app" "$WORK/install/SonosBar.app"
 defaults write app.sonosbar.SonosBar debug.updateFeedURL "http://127.0.0.1:$PORT/appcast.json"

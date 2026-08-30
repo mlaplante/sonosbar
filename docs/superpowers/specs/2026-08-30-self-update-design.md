@@ -126,8 +126,8 @@ download fetch zip; verify SHA-256 ───────────── fail 
 unpack   ditto -x -k into a temp dir
 gate     CFBundleIdentifier == app.sonosbar.SonosBar
          CFBundleShortVersionString == manifest.version ── fail ─▶ abort, report
-swap     write helper script; launch detached; NSApp.terminate
-         helper waits for exit → mv aside → ditto → relaunch
+swap     write helper script; launch detached; capped graceful shutdown, then exit(0)
+         helper waits for exit → stage payload in a dot-prefixed sibling → two renames → relaunch
 ```
 
 `ditto -x -k`, never `unzip` — `unzip` mangles bundle symlinks and resource forks.
@@ -179,9 +179,10 @@ The spike's original helper restored the bundle but never relaunched, which woul
 have left the user with a vanished menu bar icon and no error anywhere. That is the
 single most important correction this document makes.
 
-The 30s cap is sized against the app's real quit latency: `applicationShouldTerminate`
-returns `.terminateLater` with a **5s** watchdog and always replies `true` (never
-`.terminateCancel`), so 30s is a wide margin.
+The 30s cap is sized against the app's real quit latency on the update path: the
+capped graceful-shutdown closure run via `prepareForTermination` is itself raced
+against a detached `Task.sleep` that forces `exit(0)` at **5s** regardless, so 30s
+is a wide margin.
 
 Backups go to `/Applications/.SonosBar-update-backup` and staged copies to
 `/Applications/.SonosBar-update-staging` — both dot-prefixed so a leftover from a
