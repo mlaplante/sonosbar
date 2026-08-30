@@ -124,7 +124,7 @@ actor EventServer {
             }
         }
         conn.start(queue: .global(qos: .userInitiated))
-        readRequest(on: conn, accumulated: Data())
+        readRequest(on: conn, remoteHost: Self.remoteHost(of: conn), accumulated: Data())
 
         // Idle-timeout watchdog: if this connection is still open (never
         // produced a parseable request, so drop() was never called) after
@@ -158,7 +158,7 @@ actor EventServer {
     /// `nonisolated` because the NWConnection callback runs off-actor.
     /// `buffer` is passed by value on each recursion to avoid capturing
     /// mutable state across the @Sendable closure boundary.
-    private nonisolated func readRequest(on conn: NWConnection, accumulated: Data) {
+    private nonisolated func readRequest(on conn: NWConnection, remoteHost: String?, accumulated: Data) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { conn.cancel(); return }
 
@@ -177,14 +177,16 @@ actor EventServer {
                 return
             }
 
-            if let event = Self.parseRequest(buffer) {
+            if var event = Self.parseRequest(buffer) {
+                event.remoteHost = remoteHost
                 // Respond 200 OK immediately — UPnP spec wants a fast ack.
                 let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
                 conn.send(content: response, completion: .contentProcessed { _ in
                     conn.cancel()
                 })
 
-                Task { await self.dispatch(event) }
+                let finalEvent = event
+                Task { await self.dispatch(finalEvent) }
                 return
             }
 
@@ -193,7 +195,7 @@ actor EventServer {
                 return
             }
 
-            self.readRequest(on: conn, accumulated: buffer)
+            self.readRequest(on: conn, remoteHost: remoteHost, accumulated: buffer)
         }
     }
 
@@ -231,6 +233,40 @@ actor EventServer {
         guard let sid else { return nil }
 
         return Event(sid: sid, seq: seq, body: slicedBody(body, contentLength: contentLength))
+    }
+
+    /// Best-effort remote host of an accepted connection, `%scope`-stripped.
+    /// Used to bind a NOTIFY to the speaker its SID belongs to.
+    private static func remoteHost(of conn: NWConnection) -> String? {
+        switch conn.endpoint {
+        case .hostPort(let host, _):
+            return normalizedHost(host)
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizedHost(_ host: NWEndpoint.Host) -> String? {
+        switch host {
+        case .ipv4(let v4):
+            return v4.debugDescription.split(separator: "%").first.map(String.init)
+        case .ipv6(let v6):
+            return v6.debugDescription.split(separator: "%").first.map(String.init)
+        case .name(let n, _):
+            return n
+        @unknown default:
+            return nil
+        }
+    }
+
+    /// Normalizes a plain host string the same way `remoteHost` does, so the
+    /// coordinator can compare a NOTIFY's source against a stored speaker
+    /// host (which arrives from several parse paths). Strips a `%scope`
+    /// suffix and surrounding IPv6 brackets.
+    static func canonicalHost(_ host: String) -> String {
+        var h = host.split(separator: "%").first.map(String.init) ?? host
+        if h.hasPrefix("["), h.hasSuffix("]") { h = String(h.dropFirst().dropLast()) }
+        return h
     }
 
     /// Trims the body to the declared Content-Length. A sender that declares

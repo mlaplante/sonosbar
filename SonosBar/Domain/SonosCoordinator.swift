@@ -276,6 +276,20 @@ final class SonosCoordinator {
 
     private func handleEvent(_ event: EventServer.Event) async {
         guard let routing = subscriptionIndex[event.sid] else { return }
+
+        // Bind the NOTIFY to the speaker its SID belongs to: a matching SID
+        // is a 128-bit secret, but an on-path LAN attacker who observes one
+        // could otherwise spoof a NOTIFY from any address and inject fake
+        // state. Drop only when we can positively see a mismatch — fail open
+        // on an unknown source/host so a normalization gap never blackholes
+        // legitimate events (which would silently freeze the UI).
+        if let source = event.remoteHost,
+           let expected = players[routing.uuid]?.host,
+           EventServer.canonicalHost(source) != EventServer.canonicalHost(expected) {
+            Log.events.debug("Dropping NOTIFY for \(routing.uuid): source \(source) != speaker \(expected)")
+            return
+        }
+
         switch routing.topic {
         case .renderingControl:
             await handleRenderingControl(uuid: routing.uuid, body: event.body)
