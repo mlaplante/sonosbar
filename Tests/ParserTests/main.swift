@@ -318,6 +318,47 @@ expect(UpdateSignature.verify(manifestBytes: signedGarbage, signatureBase64: gar
        && (try? UpdateManifest.decode(signedGarbage)) == nil,
        "signed garbage verifies but does not decode (must fall back, not go quiet)")
 
+// MARK: - UpdateInstaller refusal conditions
+
+expectEqual(UpdateInstaller.refusalReason(
+        bundlePath: "/private/var/folders/x/AppTranslocation/y/d/SonosBar.app",
+        parentWritable: true, osVersion: "27.0", minimumSystemVersion: "26.0"),
+    .translocated, "translocated bundle refused")
+expectEqual(UpdateInstaller.refusalReason(
+        bundlePath: "/Applications/SonosBar.app",
+        parentWritable: false, osVersion: "27.0", minimumSystemVersion: "26.0"),
+    .notWritable, "unwritable parent refused")
+expectEqual(UpdateInstaller.refusalReason(
+        bundlePath: "/Applications/SonosBar.app",
+        parentWritable: true, osVersion: "26.0", minimumSystemVersion: "27.0"),
+    .osTooOld, "manifest demanding newer OS refused")
+expect(UpdateInstaller.refusalReason(
+        bundlePath: "/Applications/SonosBar.app",
+        parentWritable: true, osVersion: "27.0", minimumSystemVersion: "26.0") == nil,
+    "normal install location accepted")
+
+// MARK: - UpdateInstaller payload gate
+
+let gateManifest = try! UpdateManifest.decode(Data(goodManifestJSON.utf8))
+expectEqual(UpdateInstaller.validatePayload(
+        infoPlist: nil, manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar"),
+    .unreadablePlist, "missing payload plist rejected")
+expectEqual(UpdateInstaller.validatePayload(
+        infoPlist: ["CFBundleIdentifier": "com.attacker.payload",
+                    "CFBundleShortVersionString": "0.6.0"],
+        manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar"),
+    .identifierMismatch("com.attacker.payload"), "foreign bundle id rejected")
+expectEqual(UpdateInstaller.validatePayload(
+        infoPlist: ["CFBundleIdentifier": "app.sonosbar.SonosBar",
+                    "CFBundleShortVersionString": "0.5.0"],
+        manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar"),
+    .versionMismatch("0.5.0"), "payload version != manifest rejected")
+expect(UpdateInstaller.validatePayload(
+        infoPlist: ["CFBundleIdentifier": "app.sonosbar.SonosBar",
+                    "CFBundleShortVersionString": "0.6.0"],
+        manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar") == nil,
+    "matching payload accepted")
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")
