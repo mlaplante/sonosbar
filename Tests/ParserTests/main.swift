@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 var failures = 0
 var passes = 0
@@ -228,6 +229,40 @@ let badURL = goodManifestJSON.replacingOccurrences(
     of: "https://github.com/mlaplante/sonosbar/releases/download/v0.6.0/SonosBar-0.6.0.app.zip",
     with: " ")
 expect((try? UpdateManifest.decode(Data(badURL.utf8))) == nil, "unparseable url rejected")
+
+// MARK: - UpdateSignature Ed25519 verification
+
+let sigTestKey = Curve25519.Signing.PrivateKey()
+let sigTestPub = sigTestKey.publicKey.rawRepresentation.base64EncodedString()
+let manifestBytes = Data(goodManifestJSON.utf8)
+let goodSig = (try? sigTestKey.signature(for: manifestBytes))?.base64EncodedString() ?? ""
+
+expect(UpdateSignature.verify(manifestBytes: manifestBytes,
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub),
+       "valid signature verifies")
+expect(!UpdateSignature.verify(manifestBytes: manifestBytes + Data("x".utf8),
+                               signatureBase64: goodSig,
+                               publicKeyBase64: sigTestPub),
+       "tampered bytes rejected")
+let attackerKey = Curve25519.Signing.PrivateKey()
+let attackerSig = (try? attackerKey.signature(for: manifestBytes))?.base64EncodedString() ?? ""
+expect(!UpdateSignature.verify(manifestBytes: manifestBytes,
+                               signatureBase64: attackerSig,
+                               publicKeyBase64: sigTestPub),
+       "attacker-signed manifest rejected")
+expect(!UpdateSignature.verify(manifestBytes: manifestBytes,
+                               signatureBase64: "not base64!!!",
+                               publicKeyBase64: sigTestPub),
+       "garbage signature rejected")
+expect(!UpdateSignature.verify(manifestBytes: manifestBytes,
+                               signatureBase64: goodSig,
+                               publicKeyBase64: "AAAA"),
+       "wrong-length public key rejected")
+expect(!UpdateSignature.verify(manifestBytes: manifestBytes,
+                               signatureBase64: goodSig,
+                               publicKeyBase64: ""),
+       "empty public key rejected")
 
 // MARK: - Summary
 
