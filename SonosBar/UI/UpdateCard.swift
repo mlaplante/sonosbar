@@ -18,7 +18,27 @@ struct UpdateCard: View {
     var body: some View {
         if let manifest = updates.verifiedManifest {
             card(manifest)
+        } else if installer.lastUpdateFailureNote != nil {
+            lastFailureCard()
         }
+    }
+
+    /// Surfaces a helper-recorded failure from the previous launch. Shown
+    /// only while there is no active update flow — a fresh verified
+    /// manifest (handled above) always supersedes this stale note.
+    @ViewBuilder
+    private func lastFailureCard() -> some View {
+        HStack {
+            Text("The last update didn't complete.")
+                .font(.caption2)
+            Spacer()
+            Button("OK") {
+                installer.clearLastUpdateFailureNote()
+            }
+            .font(.caption2)
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder

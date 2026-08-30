@@ -42,7 +42,7 @@ struct SettingsView: View {
                         Task { await updates.check() }
                     }
                     if let latest = updates.latestVersion, updates.updateAvailable {
-                        Text("\(latest) available — open the SonosBar menu to install")
+                        Text("\(latest) available — see the SonosBar menu")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {

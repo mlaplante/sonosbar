@@ -85,6 +85,11 @@ final class UpdateInstaller {
 
     private(set) var state: UpdateInstallState = .idle
 
+    /// Set by consumeLastUpdateError() when the previous run's helper left a
+    /// failure note. Surfaced in the popover until dismissed or superseded
+    /// by a fresh update attempt.
+    private(set) var lastUpdateFailureNote: String?
+
     /// Graceful pre-exit cleanup, injected by AppDelegate. install() runs
     /// this (raced against a 5s cap, mirroring applicationShouldTerminate's
     /// own watchdog) instead of going through NSApp.terminate — see the
@@ -108,7 +113,14 @@ final class UpdateInstaller {
         guard let text = try? String(contentsOf: file, encoding: .utf8),
               !text.isEmpty else { return nil }
         try? FileManager.default.removeItem(at: file)
+        lastUpdateFailureNote = text
         return text
+    }
+
+    /// Dismisses the last-update-failure note from the popover.
+    @MainActor
+    func clearLastUpdateFailureNote() {
+        lastUpdateFailureNote = nil
     }
 
     // MARK: - Orchestration
