@@ -746,7 +746,9 @@ private struct QueueList: View {
                         .frame(width: 20, alignment: .trailing)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.title)
+                    // Manually enqueued or line-in items can arrive with no
+                    // dc:title at all — never render a blank row.
+                    Text(item.title.isEmpty ? "Track \(item.index)" : item.title)
                         .font(.callout)
                         .fontWeight(isCurrent ? .semibold : .regular)
                         .lineLimit(1)

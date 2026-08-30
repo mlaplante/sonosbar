@@ -629,15 +629,26 @@ final class SonosCoordinator {
 
     private func apply(playMode: PlayMode) async {
         guard let group = selectedGroup else { return }
+        let previous = playModes[group.id]
         playModes[group.id] = playMode   // optimistic; event confirms
         await runOnSelectedCoordinator { try await self.transport.setPlayMode(playMode, on: $0) }
+        if lastError != nil {
+            // Speaker refused (712 "Play mode not supported" on stations) —
+            // roll the toggle back so the UI doesn't show a mode that
+            // isn't actually set.
+            playModes[group.id] = previous
+        }
     }
 
     func toggleCrossfade() async {
         guard let group = selectedGroup else { return }
+        let previous = crossfades[group.id]
         let target = !selectedCrossfade
         crossfades[group.id] = target
         await runOnSelectedCoordinator { try await self.transport.setCrossfade(target, on: $0) }
+        if lastError != nil {
+            crossfades[group.id] = previous
+        }
     }
 
     // MARK: - Group all / ungroup all
