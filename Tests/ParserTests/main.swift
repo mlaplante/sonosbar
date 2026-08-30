@@ -359,6 +359,12 @@ expect(UpdateInstaller.validatePayload(
         manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar") == nil,
     "matching payload accepted")
 
+// MARK: - EQ clamp
+
+expectEqual(EQSettings.clampEQ(15), 10, "EQ clamps above +10")
+expectEqual(EQSettings.clampEQ(-15), -10, "EQ clamps below -10")
+expectEqual(EQSettings.clampEQ(3), 3, "EQ passes an in-range value")
+
 // MARK: - Security guards
 
 // EventServer.slicedBody: trims to declared Content-Length, passes through otherwise.

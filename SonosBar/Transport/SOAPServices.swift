@@ -17,6 +17,7 @@ enum SOAPService {
 
     case avTransport
     case renderingControl
+    case groupRenderingControl
     case zoneGroupTopology
     case contentDirectory
 
@@ -24,20 +25,22 @@ enum SOAPService {
     /// xmlns:u attribute on the body element.
     var serviceType: String {
         switch self {
-        case .avTransport:       return "urn:schemas-upnp-org:service:AVTransport:1"
-        case .renderingControl:  return "urn:schemas-upnp-org:service:RenderingControl:1"
-        case .zoneGroupTopology: return "urn:schemas-upnp-org:service:ZoneGroupTopology:1"
-        case .contentDirectory:  return "urn:schemas-upnp-org:service:ContentDirectory:1"
+        case .avTransport:          return "urn:schemas-upnp-org:service:AVTransport:1"
+        case .renderingControl:     return "urn:schemas-upnp-org:service:RenderingControl:1"
+        case .groupRenderingControl: return "urn:schemas-upnp-org:service:GroupRenderingControl:1"
+        case .zoneGroupTopology:    return "urn:schemas-upnp-org:service:ZoneGroupTopology:1"
+        case .contentDirectory:     return "urn:schemas-upnp-org:service:ContentDirectory:1"
         }
     }
 
     /// HTTP path on port 1400 for the control endpoint.
     var controlPath: String {
         switch self {
-        case .avTransport:       return "/MediaRenderer/AVTransport/Control"
-        case .renderingControl:  return "/MediaRenderer/RenderingControl/Control"
-        case .zoneGroupTopology: return "/ZoneGroupTopology/Control"
-        case .contentDirectory:  return "/MediaServer/ContentDirectory/Control"
+        case .avTransport:          return "/MediaRenderer/AVTransport/Control"
+        case .renderingControl:     return "/MediaRenderer/RenderingControl/Control"
+        case .groupRenderingControl: return "/MediaRenderer/GroupRenderingControl/Control"
+        case .zoneGroupTopology:    return "/ZoneGroupTopology/Control"
+        case .contentDirectory:     return "/MediaServer/ContentDirectory/Control"
         }
     }
 
@@ -45,10 +48,11 @@ enum SOAPService {
     /// (Used in chunk 5 when GENA subscriptions go live.)
     var eventPath: String {
         switch self {
-        case .avTransport:       return "/MediaRenderer/AVTransport/Event"
-        case .renderingControl:  return "/MediaRenderer/RenderingControl/Event"
-        case .zoneGroupTopology: return "/ZoneGroupTopology/Event"
-        case .contentDirectory:  return "/MediaServer/ContentDirectory/Event"
+        case .avTransport:          return "/MediaRenderer/AVTransport/Event"
+        case .renderingControl:     return "/MediaRenderer/RenderingControl/Event"
+        case .groupRenderingControl: return "/MediaRenderer/GroupRenderingControl/Event"
+        case .zoneGroupTopology:    return "/ZoneGroupTopology/Event"
+        case .contentDirectory:     return "/MediaServer/ContentDirectory/Event"
         }
     }
 }

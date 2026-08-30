@@ -69,6 +69,10 @@ final class SonosCoordinator {
     private(set) var playModes: [String: PlayMode] = [:]
     private(set) var crossfades: [String: Bool] = [:]
 
+    // MARK: - EQ
+    /// Bass/treble/loudness keyed by group ID (read from the coordinator).
+    private(set) var eqByGroup: [String: EQSettings] = [:]
+
     // MARK: - Dependencies
 
     private let discovery: SSDPDiscovery
@@ -417,11 +421,17 @@ final class SonosCoordinator {
             self.crossfades[group.id] = pm.crossfade
             self.lastError = nil
         } catch is CancellationError {
-            // Lifecycle cancellation — not a real failure.
+            return
         } catch let error as SonosError {
             self.lastError = error
         } catch {
             Log.domain.error("Group state fetch failed")
+        }
+        // EQ is fetched best-effort and separately: a device that faults on
+        // GetBass/GetTreble/GetLoudness (some bonded members do) must not
+        // blank the playback/volume refresh above.
+        if let eq = try? await transport.getEQ(of: coord) {
+            self.eqByGroup[group.id] = eq
         }
     }
 
@@ -502,7 +512,18 @@ final class SonosCoordinator {
         Task { [volumeDebouncer] in
             await volumeDebouncer.submit(volume) { v in
                 guard let player = coordPlayer else { return }
-                try? await transport.setVolume(v, on: player)
+                do {
+                    // True group volume: one call to the coordinator scales
+                    // the whole group's mix (per-speaker SetVolume only moved
+                    // the coordinator's own speaker).
+                    try await transport.setGroupVolume(v, on: player)
+                } catch is CancellationError {
+                } catch {
+                    // Firmware without GroupRenderingControl (or a fault):
+                    // degrade to per-coordinator volume rather than a dead
+                    // slider.
+                    try? await transport.setVolume(v, on: player)
+                }
             }
         }
     }
@@ -537,10 +558,17 @@ final class SonosCoordinator {
         guard let group = selectedGroup,
               let coord = coordinator(of: group) else { return }
         do {
-            try await transport.setMute(muted, on: coord)
+            // Group mute so every speaker in the group follows; fall back to
+            // coordinator-only mute on firmware without GroupRenderingControl.
+            try await transport.setGroupMute(muted, on: coord)
             volumes[group.id, default: VolumeSnapshot()].muted = muted
         } catch {
-            Log.domain.error("setMute failed")
+            do {
+                try await transport.setMute(muted, on: coord)
+                volumes[group.id, default: VolumeSnapshot()].muted = muted
+            } catch {
+                Log.domain.error("setMute failed")
+            }
         }
     }
 
@@ -663,6 +691,43 @@ final class SonosCoordinator {
         if lastError != nil {
             crossfades[group.id] = previous
         }
+    }
+
+    // MARK: - EQ actions
+
+    var selectedEQ: EQSettings {
+        selectedGroupID.flatMap { eqByGroup[$0] } ?? EQSettings()
+    }
+
+    func setBass(_ bass: Int) async {
+        await applyEQ { $0.bass = EQSettings.clampEQ(bass) } send: {
+            try await self.transport.setBass(bass, on: $0)
+        }
+    }
+
+    func setTreble(_ treble: Int) async {
+        await applyEQ { $0.treble = EQSettings.clampEQ(treble) } send: {
+            try await self.transport.setTreble(treble, on: $0)
+        }
+    }
+
+    func setLoudness(_ enabled: Bool) async {
+        await applyEQ { $0.loudness = enabled } send: {
+            try await self.transport.setLoudness(enabled, on: $0)
+        }
+    }
+
+    /// Optimistically mutate the selected group's EQ, send it, and roll the
+    /// mutation back if the speaker refused — mirrors `apply(playMode:)`.
+    private func applyEQ(_ mutate: (inout EQSettings) -> Void,
+                         send: @escaping @Sendable (DiscoveredPlayer) async throws -> Void) async {
+        guard let group = selectedGroup else { return }
+        let previous = eqByGroup[group.id]
+        var next = eqByGroup[group.id] ?? EQSettings()
+        mutate(&next)
+        eqByGroup[group.id] = next
+        await runOnSelectedCoordinator { try await send($0) }
+        if lastError != nil { eqByGroup[group.id] = previous }
     }
 
     // MARK: - Group all / ungroup all

@@ -47,6 +47,22 @@ protocol SonosTransport: Sendable {
     func setVolume(_ volume: Int, on player: DiscoveredPlayer) async throws
     func setMute(_ muted: Bool, on player: DiscoveredPlayer) async throws
 
+    /// Group volume via GroupRenderingControl: one call to the group
+    /// coordinator scales the whole group's mix, which per-speaker
+    /// RenderingControl SetVolume does not. Send to the coordinator.
+    func setGroupVolume(_ volume: Int, on coordinator: DiscoveredPlayer) async throws
+    func getGroupVolume(of coordinator: DiscoveredPlayer) async throws -> Int
+    func setGroupMute(_ muted: Bool, on coordinator: DiscoveredPlayer) async throws
+
+    // MARK: - EQ (RenderingControl service)
+
+    /// Bass/treble/loudness for a single speaker (the group coordinator in
+    /// practice). Bass/treble are −10…10; loudness is boolean.
+    func getEQ(of player: DiscoveredPlayer) async throws -> EQSettings
+    func setBass(_ bass: Int, on player: DiscoveredPlayer) async throws
+    func setTreble(_ treble: Int, on player: DiscoveredPlayer) async throws
+    func setLoudness(_ enabled: Bool, on player: DiscoveredPlayer) async throws
+
     // MARK: - Topology (ZoneGroupTopology service)
 
     func getZoneGroups(via player: DiscoveredPlayer) async throws -> [ZoneGroup]

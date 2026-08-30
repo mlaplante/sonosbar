@@ -99,6 +99,19 @@ struct VolumeSnapshot: Sendable, Equatable {
     var muted: Bool = false
 }
 
+/// Equalizer settings from RenderingControl. Bass/treble are the Sonos
+/// range −10…+10 (verified against a live device SCPD); loudness is a
+/// per-speaker boolean.
+struct EQSettings: Sendable, Equatable {
+    var bass: Int = 0             // -10...10
+    var treble: Int = 0          // -10...10
+    var loudness: Bool = true    // Sonos ships loudness on by default
+
+    /// Clamp helper shared by the setters so the UI can't push an
+    /// out-of-range value the speaker would reject with a SOAP fault.
+    static func clampEQ(_ value: Int) -> Int { max(-10, min(10, value)) }
+}
+
 /// A single zone-group member as reported by ZoneGroupTopology.
 struct ZoneGroupMember: Sendable, Equatable, Hashable {
     let uuid: String

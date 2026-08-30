@@ -157,6 +157,101 @@ struct SOAPTransport: SonosTransport {
         )
     }
 
+    // MARK: - Group volume (GroupRenderingControl service)
+
+    func setGroupVolume(_ volume: Int, on coordinator: DiscoveredPlayer) async throws {
+        guard (0...100).contains(volume) else {
+            throw SonosError.invalidArgument("group volume must be 0...100, got \(volume)")
+        }
+        _ = try await client.send(
+            action: "SetGroupVolume",
+            service: .groupRenderingControl,
+            arguments: [("InstanceID", "0"), ("DesiredVolume", "\(volume)")],
+            to: coordinator
+        )
+    }
+
+    func getGroupVolume(of coordinator: DiscoveredPlayer) async throws -> Int {
+        let response = try await client.send(
+            action: "GetGroupVolume",
+            service: .groupRenderingControl,
+            arguments: [("InstanceID", "0")],
+            to: coordinator
+        )
+        let raw = response.descendants(named: "CurrentVolume").first?.trimmed ?? "0"
+        return Int(raw) ?? 0
+    }
+
+    func setGroupMute(_ muted: Bool, on coordinator: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetGroupMute",
+            service: .groupRenderingControl,
+            arguments: [("InstanceID", "0"), ("DesiredMute", muted ? "1" : "0")],
+            to: coordinator
+        )
+    }
+
+    // MARK: - EQ (RenderingControl service)
+
+    func getEQ(of player: DiscoveredPlayer) async throws -> EQSettings {
+        async let bassTask = client.send(
+            action: "GetBass",
+            service: .renderingControl,
+            arguments: [("InstanceID", "0")],
+            to: player
+        )
+        async let trebleTask = client.send(
+            action: "GetTreble",
+            service: .renderingControl,
+            arguments: [("InstanceID", "0")],
+            to: player
+        )
+        async let loudnessTask = client.send(
+            action: "GetLoudness",
+            service: .renderingControl,
+            arguments: [("InstanceID", "0"), ("Channel", "Master")],
+            to: player
+        )
+        let (bassXML, trebleXML, loudnessXML) = try await (bassTask, trebleTask, loudnessTask)
+        let bass = Int(bassXML.descendants(named: "CurrentBass").first?.trimmed ?? "0") ?? 0
+        let treble = Int(trebleXML.descendants(named: "CurrentTreble").first?.trimmed ?? "0") ?? 0
+        let loud = loudnessXML.descendants(named: "CurrentLoudness").first?.trimmed == "1"
+        return EQSettings(bass: EQSettings.clampEQ(bass),
+                          treble: EQSettings.clampEQ(treble),
+                          loudness: loud)
+    }
+
+    func setBass(_ bass: Int, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetBass",
+            service: .renderingControl,
+            arguments: [("InstanceID", "0"), ("DesiredBass", "\(EQSettings.clampEQ(bass))")],
+            to: player
+        )
+    }
+
+    func setTreble(_ treble: Int, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetTreble",
+            service: .renderingControl,
+            arguments: [("InstanceID", "0"), ("DesiredTreble", "\(EQSettings.clampEQ(treble))")],
+            to: player
+        )
+    }
+
+    func setLoudness(_ enabled: Bool, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetLoudness",
+            service: .renderingControl,
+            arguments: [
+                ("InstanceID", "0"),
+                ("Channel", "Master"),
+                ("DesiredLoudness", enabled ? "1" : "0")
+            ],
+            to: player
+        )
+    }
+
     // MARK: - Topology
 
     func getZoneGroups(via player: DiscoveredPlayer) async throws -> [ZoneGroup] {
