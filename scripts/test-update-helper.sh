@@ -46,6 +46,13 @@ make_bundle() { # path version
         "$1/Contents/Info.plist" >/dev/null
 }
 
+# A pid guaranteed to be dead: spawn a no-op and reap it, up front, so
+# every non-timeout case below can reuse it. A literal like 99999 can
+# collide with a real long-lived process, hanging the helper's wait loop
+# for the full cap.
+sh -c 'exit 0' & DEADPID=$!
+wait "$DEADPID" 2>/dev/null || true
+
 # --- Case 1: wait-loop timeout must leave the bundle untouched ---
 make_bundle "$WORK/dst1.app" 1.0.0
 make_bundle "$WORK/src1.app" 2.0.0
@@ -53,32 +60,65 @@ touch "$WORK/dst1.app/Contents/CANARY"
 sleep 300 & HOLD=$!   # a pid that will NOT exit
 SB_WAIT_TICKS=3 sh "$WORK/swap.sh" "$HOLD" "$WORK/src1.app" "$WORK/dst1.app" "$WORK/err1" || true
 kill "$HOLD" 2>/dev/null || true
-check "timeout leaves bundle untouched" '[ -f "$WORK/dst1.app/Contents/CANARY" ]'
-check "timeout recorded an error"        '[ -s "$WORK/err1" ]'
+check "timeout leaves bundle untouched"      '[ -f "$WORK/dst1.app/Contents/CANARY" ]'
+check "timeout recorded an error"            '[ -s "$WORK/err1" ]'
+check "timeout left no staging leftover"     '[ ! -e "$WORK/.SonosBar-update-staging" ]'
 
-# A pid guaranteed to be dead: spawn a no-op and reap it. A literal
-# like 99999 can collide with a real long-lived process, hanging the
-# helper's wait loop for the full cap.
-sh -c 'exit 0' & DEADPID=$!
-wait "$DEADPID" 2>/dev/null || true
-
-# --- Case 2: swap failure must restore AND relaunch the original ---
+# --- Case 2: a missing payload must leave the bundle untouched before
+# anything is renamed (the staged-copy sequence's first gate) ---
 make_bundle "$WORK/dst2.app" 1.0.0
 touch "$WORK/dst2.app/Contents/CANARY"
-SB_OPEN=/usr/bin/true sh "$WORK/swap.sh" "$DEADPID" "$WORK/nonexistent.app" "$WORK/dst2.app" "$WORK/err2" || true
-check "failed swap restores original"   '[ -f "$WORK/dst2.app/Contents/CANARY" ]'
-check "failed swap recorded an error"   '[ -s "$WORK/err2" ]'
-check "failed swap attempted relaunch"  'grep -q "relaunched-original" "$WORK/err2"'
-check "no leftover backup"              '[ ! -e "$WORK/.SonosBar-update-backup" ]'
+RC2=0
+sh "$WORK/swap.sh" "$DEADPID" "$WORK/nonexistent.app" "$WORK/dst2.app" "$WORK/err2" || RC2=$?
+check "missing SRC leaves bundle untouched"  '[ -f "$WORK/dst2.app/Contents/CANARY" ]'
+check "missing SRC recorded an error"        '[ -s "$WORK/err2" ]'
+check "missing SRC exits 1"                  '[ "$RC2" = 1 ]'
+check "missing SRC left no staging leftover" '[ ! -e "$WORK/.SonosBar-update-staging" ]'
 
-# --- Case 3: happy path swaps and relaunches the new version ---
+# --- Case 3: a failed final rename onto DST must restore AND relaunch
+# the original. Forcing that rename to fail needs either a filesystem
+# race or a deliberate seam; SB_FORCE_RESTORE is the seam — it drops the
+# staged copy right before the rename, which is a real rename failure
+# (ENOENT), not a stubbed-out branch. SB_OPEN points at a marker script
+# instead of /usr/bin/true so relaunch is verified as an actual
+# invocation carrying DST as its argument, not inferred from error text
+# alone (grepping "relaunched-original" alone is vacuous: fail() prints
+# it unconditionally even if the open call above it were deleted).
 make_bundle "$WORK/dst3.app" 1.0.0
 make_bundle "$WORK/src3.app" 2.0.0
-SB_OPEN=/usr/bin/true sh "$WORK/swap.sh" "$DEADPID" "$WORK/src3.app" "$WORK/dst3.app" "$WORK/err3"
-V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$WORK/dst3.app/Contents/Info.plist")
-check "happy path installed new version" '[ "$V" = "2.0.0" ]'
-check "happy path left no error file"    '[ ! -s "$WORK/err3" ]'
-check "happy path left no backup"        '[ ! -e "$WORK/.SonosBar-update-backup" ]'
+touch "$WORK/dst3.app/Contents/CANARY"
+OPEN_MARKER="$WORK/open-marker"
+rm -f "$OPEN_MARKER"
+cat > "$WORK/fake-open.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$1" >> "$OPEN_MARKER"
+exit 0
+EOF
+chmod +x "$WORK/fake-open.sh"
+SB_FORCE_RESTORE=1 SB_OPEN="$WORK/fake-open.sh" \
+    sh "$WORK/swap.sh" "$DEADPID" "$WORK/src3.app" "$WORK/dst3.app" "$WORK/err3" || true
+check "failed swap restores original"           '[ -f "$WORK/dst3.app/Contents/CANARY" ]'
+check "failed swap recorded an error"           '[ -s "$WORK/err3" ]'
+check "failed swap attempted relaunch"          'grep -q "relaunched-original" "$WORK/err3"'
+check "failed swap actually invoked open with dst" \
+    '[ -f "$OPEN_MARKER" ] && grep -qF "$WORK/dst3.app" "$OPEN_MARKER"'
+check "no leftover backup after failed swap"    '[ ! -e "$WORK/.SonosBar-update-backup" ]'
+check "no leftover staging after failed swap"   '[ ! -e "$WORK/.SonosBar-update-staging" ]'
 
-echo; echo "$((9 - FAILURES))/9 helper checks passed"  # 9 = total check calls
+# --- Case 4: happy path swaps and relaunches the new version. The error
+# file is seeded with stale content from a fictitious earlier failure
+# first: a successful swap must truncate it immediately, not merely
+# leave it alone because nothing new got written this run. ---
+make_bundle "$WORK/dst4.app" 1.0.0
+make_bundle "$WORK/src4.app" 2.0.0
+printf 'stale error from a previous run\n' > "$WORK/err4"
+SB_OPEN=/usr/bin/true sh "$WORK/swap.sh" "$DEADPID" "$WORK/src4.app" "$WORK/dst4.app" "$WORK/err4"
+V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$WORK/dst4.app/Contents/Info.plist")
+check "happy path installed new version"     '[ "$V" = "2.0.0" ]'
+check "happy path truncates stale error"     '[ ! -s "$WORK/err4" ]'
+check "happy path left no backup"            '[ ! -e "$WORK/.SonosBar-update-backup" ]'
+check "happy path left no staging"           '[ ! -e "$WORK/.SonosBar-update-staging" ]'
+
+TOTAL=17
+echo; echo "$((TOTAL - FAILURES))/$TOTAL helper checks passed"
 exit $((FAILURES == 0 ? 0 : 1))

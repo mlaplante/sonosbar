@@ -109,6 +109,11 @@ final class UpdateInstaller {
     /// the handoff can fail safely into `state`; nothing on disk is
     /// touched until the helper takes over.
     func install(manifest: UpdateManifest) async {
+        // Re-entrancy guard: a second tap while a download/unpack/handoff
+        // is already in flight must not start a second one. Idle, refused,
+        // and failed are all fine to retry from — only mid-flight work
+        // (.working) blocks a new call.
+        if case .working = state { return }
         let bundleURL = Bundle.main.bundleURL
         let osv = ProcessInfo.processInfo.operatingSystemVersion
         if let refusal = Self.refusalReason(
@@ -222,24 +227,58 @@ enum UpdateInstallFailure: Error {
 /// production text without instantiating main-actor machinery.
 ///
 /// Contract: sh swap.sh <pid> <src.app> <dst.app> <errfile>
+///   * PATH is pinned to the standard system directories at the very top,
+///     ignoring whatever PATH the parent process handed it — this runs
+///     detached, post-terminate, with nobody watching, so it must not
+///     resolve ditto/mv/xattr/etc. from an attacker- or environment-
+///     controlled PATH.
+///   * SIGHUP is ignored (`trap '' HUP`): if the app was launched from a
+///     terminal that then closes, the helper must run to completion
+///     rather than dying with its controlling terminal.
 ///   * SB_WAIT_TICKS overrides the exit-wait cap (default 300 x 0.1s = 30s;
 ///     the app's .terminateLater watchdog replies within 5s, so 30s is a
 ///     wide margin). On timeout the app is evidently still alive: touch
 ///     NOTHING, record why, bail.
-///   * SB_OPEN overrides /usr/bin/open (tests substitute /usr/bin/true).
-///   * Backup goes to <dst-dir>/.SonosBar-update-backup — dot-prefixed so
-///     a leftover from a crash is never indexed as a second visible app;
-///     same volume, so the rename is atomic.
-///   * Any failure after the old app exited MUST bring the original back
-///     AND relaunch it: past NSApp.terminate nobody else can, and the
-///     alternative is a menu bar icon that silently never returns.
+///   * SB_OPEN overrides /usr/bin/open (tests substitute /usr/bin/true or
+///     a marker script that records its argument).
+///   * SB_FORCE_RESTORE is a test-only seam (default off, inert in
+///     production): it drops the staged copy immediately before the
+///     rename onto DST, turning that rename into a real (if
+///     test-triggered) failure so the restore-and-relaunch branch below
+///     can be exercised deterministically without racing the filesystem.
+///   * The swap is staged, not in-place: the payload is ditto'd into
+///     <dst-dir>/.SonosBar-update-staging first. A bad payload or a
+///     failed staging copy is abandoned there WITHOUT ever touching the
+///     live bundle at DST, so a corrupt download can't strand the app.
+///     Only once staging holds a complete copy do we (1) rename DST to
+///     <dst-dir>/.SonosBar-update-backup, then (2) rename staging onto
+///     DST. Two same-volume renames are near-instant, so the window
+///     where nothing exists at DST is milliseconds — not the seconds an
+///     mv-old-aside-then-ditto-new-in-place sequence would leave open.
+///   * Backup and staging are dot-prefixed so a leftover from a crash is
+///     never indexed as a second visible app; both live next to DST, so
+///     every rename is atomic.
+///   * A failed rename onto DST (step 2 above) MUST bring the original
+///     back AND relaunch it: past NSApp.terminate nobody else can, and
+///     the alternative is a menu bar icon that silently never returns.
+///     Every earlier failure (missing payload, staging copy, or the
+///     DST->backup rename itself) leaves DST untouched, so no restore is
+///     needed there.
+///   * A successful swap truncates the error file immediately, not at
+///     exit: a stale error from a previous failed attempt must not
+///     survive a since-succeeded update, and if the final relaunch step
+///     still fails, that failure lands in an otherwise-clean file.
 func helperScriptForTesting() -> String {
     """
     #!/bin/sh
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    trap '' HUP
     PID="$1"; SRC="$2"; DST="$3"; ERR="$4"
     OPEN="${SB_OPEN:-/usr/bin/open}"
     CAP="${SB_WAIT_TICKS:-300}"
-    BACKUP="$(dirname "$DST")/.SonosBar-update-backup"
+    DSTDIR="$(dirname "$DST")"
+    BACKUP="$DSTDIR/.SonosBar-update-backup"
+    STAGING="$DSTDIR/.SonosBar-update-staging"
     fail() { printf '%s\\n' "$1" >> "$ERR"; exit 1; }
     n=0
     while kill -0 "$PID" 2>/dev/null; do
@@ -247,10 +286,18 @@ func helperScriptForTesting() -> String {
         [ "$n" -gt "$CAP" ] && fail "timeout: app (pid $PID) never exited; bundle untouched"
         sleep 0.1
     done
+    [ -d "$SRC" ] || fail "payload missing; bundle untouched"
+    rm -rf "$STAGING"
+    if ! ditto "$SRC" "$STAGING"; then
+        rm -rf "$STAGING"
+        fail "staging copy failed; bundle untouched"
+    fi
     rm -rf "$BACKUP"
-    mv "$DST" "$BACKUP" || fail "could not move old bundle aside"
-    if ditto "$SRC" "$DST"; then
+    mv "$DST" "$BACKUP" || { rm -rf "$STAGING"; fail "could not move old bundle aside; bundle untouched"; }
+    [ -n "${SB_FORCE_RESTORE:-}" ] && rm -rf "$STAGING"
+    if mv "$STAGING" "$DST"; then
         rm -rf "$BACKUP"
+        : > "$ERR"
     else
         rm -rf "$DST"
         mv "$BACKUP" "$DST" || fail "restore failed: SonosBar may need reinstalling from GitHub"

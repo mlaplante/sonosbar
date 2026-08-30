@@ -152,8 +152,18 @@ helper script, which is why the helper, not the app, owns recovery:
 
 - **Wait-loop timeout (30s):** the app is evidently still alive. Do **not** touch
   the bundle. Exit without changing anything; the running app is unharmed.
-- **`mv` or `ditto` fails:** restore the original bundle, then **`open` it** so the
-  user gets their app back, then exit non-zero.
+- **Swap fails:** the swap is staged, not in-place. The payload is `ditto`'d into a
+  sibling `.SonosBar-update-staging` directory first, and only once that copy is
+  complete does the helper (1) rename the old bundle aside to
+  `.SonosBar-update-backup`, then (2) rename staging onto the live path. A failure
+  before step 1 — missing payload, or the staging copy itself failing — leaves the
+  bundle untouched, same as the timeout case above. A failure at step 2, the only
+  rename that can strand the app off-disk, restores the backup, then **`open`s it**
+  so the user gets their app back, then exits non-zero. Two same-volume renames in
+  place of the old mv-aside-then-ditto-in-place sequence shrink the crash window —
+  the stretch where nothing exists at the live path — from however long `ditto`
+  takes to copy the whole app down to the duration of a single rename: milliseconds,
+  not seconds.
 - **Any failure:** write a reason to
   `~/Library/Application Support/SonosBar/last-update-error.txt`. On next launch the
   app reads it, surfaces "the last update didn't complete" in the popover, and
@@ -167,9 +177,10 @@ The 30s cap is sized against the app's real quit latency: `applicationShouldTerm
 returns `.terminateLater` with a **5s** watchdog and always replies `true` (never
 `.terminateCancel`), so 30s is a wide margin.
 
-Backups go to `/Applications/.SonosBar-update-backup` — dot-prefixed so a leftover
-from a mid-flight crash is not indexed by LaunchServices or Spotlight as a second
-visible app, and on the same volume so the rename stays atomic.
+Backups go to `/Applications/.SonosBar-update-backup` and staged copies to
+`/Applications/.SonosBar-update-staging` — both dot-prefixed so a leftover from a
+mid-flight crash is not indexed by LaunchServices or Spotlight as a second visible
+app, and both on the same volume as the live bundle so every rename stays atomic.
 
 ## UI
 
