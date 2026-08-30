@@ -9,13 +9,19 @@ Direct-distribution `.dmg`, not Mac App Store.
 ## Features
 
 - 🎵 **Play / Pause / Skip** — from the menu bar, via global hotkeys, or via the macOS media keys
-- 🔊 **Group + per-speaker volume** — independent sliders for stereo pairs and grouped zones
-- ⭐ **Favorites** — every favorite in your Sonos system, searchable, one-click play
+- ⏩ **Scrub bar** — drag to seek within the current track
+- 🔀 **Shuffle / repeat / crossfade** — playback mode toggles
+- 🔊 **True group + per-speaker volume** — one slider scales the whole group (via GroupRenderingControl); independent sliders for stereo pairs and grouped zones
+- 🎚️ **EQ** — bass, treble, and loudness per zone
+- 📋 **Queue** — browse the group's queue and jump to any track
+- 👥 **Grouping** — join and split speakers from the app (group all / ungroup all)
+- ⭐ **Favorites** — every favorite in your Sonos system, searchable, one-click play, pin to top
 - 🌙 **Sleep timer** — 15/30/45/60/90/120-minute presets
 - 🏠 **Zone switching** — pick any group from the popover
 - 🎛️ **Now Playing integration** — title, artist, art surface in Control Center and on the lock screen
 - ⌨️ **Global hotkeys** — `⌘⌥⌃ P` play/pause, `⌘⌥⌃ ←/→` prev/next, `⌘⌥⌃ ↑/↓` volume
 - 🚀 **Launch at login** — optional, via SMAppService
+- ⬆️ **Signed self-update** — checks a release feed and installs Ed25519-signed updates in place
 
 All local. No cloud account required. No data ever leaves your LAN.
 
@@ -115,10 +121,10 @@ to keep running while the popover is closed.
 
 ## Known limitations
 
-- **No support for grouping/ungrouping speakers** from within the app — use the Sonos app for that. (Doable via `AVTransport.SetAVTransportURI` with `x-rincon:UUID`; deferred to v1.1.)
-- **No queue management** — drop, reorder, save. The app is a controller, not a queue editor.
-- **No Trueplay, EQ, or speaker setup**.
-- **Local-only** — controlling Sonos when away from home isn't supported in v1.
+- **No queue editing** — the queue is browse-and-jump only; dropping, reordering, and saving aren't supported yet.
+- **No Trueplay or speaker setup** — EQ (bass/treble/loudness) is supported, but room calibration and initial speaker configuration stay in the Sonos app.
+- **No alarms** or music-service search from within the app.
+- **Local-only** — controlling Sonos when away from home isn't supported.
 
 ## License
 

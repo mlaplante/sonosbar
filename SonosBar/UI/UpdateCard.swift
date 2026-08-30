@@ -29,8 +29,10 @@ struct UpdateCard: View {
     @ViewBuilder
     private func lastFailureCard() -> some View {
         HStack {
-            Text("The last update didn't complete.")
+            Text(installer.lastUpdateFailureNote ?? "The last update didn't complete.")
                 .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button("OK") {
                 installer.clearLastUpdateFailureNote()

@@ -39,10 +39,19 @@ struct MenuBarRootView: View {
     @Environment(UpdateChecker.self) private var updates
 
     @State private var tab: Tab = .nowPlaying
-    @State private var isZonePickerExpanded = false
-    @State private var isGroupEditExpanded = false
-    @State private var isSpeakerListExpanded = false
-    @State private var isSleepTimerExpanded = false
+
+    /// Only one Now Playing disclosure is open at a time — opening one
+    /// collapses the others, so a large household can't stack four expanded
+    /// sections tall enough to push the popover off-screen.
+    private enum NowPlayingSection { case speakers, zones, group, sleep }
+    @State private var expandedSection: NowPlayingSection?
+
+    private func sectionBinding(_ section: NowPlayingSection) -> Binding<Bool> {
+        Binding(
+            get: { expandedSection == section },
+            set: { expandedSection = $0 ? section : nil }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -69,6 +78,10 @@ struct MenuBarRootView: View {
         }
         .padding(14)
         .frame(width: 340)
+        // Fixed-width menu-bar surface: cap Dynamic Type so the large
+        // accessibility sizes don't truncate the many fixed-width value
+        // frames (volume readouts, zone names) into ellipses.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 
     // MARK: - Tab bar
@@ -146,10 +159,11 @@ struct MenuBarRootView: View {
                 .id(group.id)
             TransportRow()
             VolumeRow()
-            SpeakerList(group: group, isExpanded: $isSpeakerListExpanded)
-            ZonePicker(isExpanded: $isZonePickerExpanded)
-            GroupEditRow(isExpanded: $isGroupEditExpanded)
-            SleepTimerRow(isExpanded: $isSleepTimerExpanded)
+            SpeakerList(group: group, isExpanded: sectionBinding(.speakers))
+            EQRow()
+            ZonePicker(isExpanded: sectionBinding(.zones))
+            GroupEditRow(isExpanded: sectionBinding(.group))
+            SleepTimerRow(isExpanded: sectionBinding(.sleep))
         } else {
             noSpeakersView
         }
@@ -166,10 +180,22 @@ struct MenuBarRootView: View {
     private var footer: some View {
         VStack(spacing: 6) {
             if let error = coordinator.lastError {
-                Text(error.description)
-                    .font(.caption2)
-                    .foregroundStyle(.red.opacity(0.85))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .top, spacing: 6) {
+                    Text(error.description)
+                        .font(.caption2)
+                        .foregroundStyle(.red.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        coordinator.clearLastError()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                    .accessibilityLabel("Dismiss error")
+                }
             }
 
             Divider()
@@ -216,6 +242,7 @@ struct MenuBarRootView: View {
                 }
                 .buttonStyle(FooterIconButtonStyle())
                 .help("Settings")
+                .accessibilityLabel("Settings")
                 .keyboardShortcut(",", modifiers: [.command])
 
                 FooterIconButton(
@@ -246,6 +273,7 @@ private struct FooterIconButton: View {
         }
         .buttonStyle(FooterIconButtonStyle())
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -306,11 +334,19 @@ private struct NowPlayingCard: View {
     @ViewBuilder
     private var artwork: some View {
         if let url = snapshot.track.albumArtURL {
-            AsyncImage(url: url) { phase in
+            // Transaction animates phase changes so new art crossfades in
+            // rather than popping. A load in progress shows a spinner; a
+            // genuine failure shows the plain placeholder — the two are no
+            // longer indistinguishable during a track change.
+            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.25))) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().aspectRatio(contentMode: .fill)
-                default:
+                case .empty:
+                    artworkPlaceholder.overlay { ProgressView().controlSize(.small) }
+                case .failure:
+                    artworkPlaceholder
+                @unknown default:
                     artworkPlaceholder
                 }
             }
@@ -413,6 +449,23 @@ private struct ScrubberRow: View {
                     localPosition = min(localPosition + 1, duration)
                 }
             }
+            // The scrubber is a from-scratch drag control; without these,
+            // VoiceOver reads nothing and cannot seek. Expose it as an
+            // adjustable value that steps ±15s.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue("\(format(dragPreview ?? localPosition)) of \(format(duration))")
+            .accessibilityAdjustableAction { direction in
+                let step: TimeInterval = 15
+                let target: Int
+                switch direction {
+                case .increment: target = Int(min(localPosition + step, duration))
+                case .decrement: target = Int(max(localPosition - step, 0))
+                @unknown default: return
+                }
+                localPosition = TimeInterval(target)
+                Task { await coordinator.seek(toSeconds: target) }
+            }
         }
     }
 
@@ -434,6 +487,11 @@ private struct TransportRow: View {
 
     @Environment(SonosCoordinator.self) private var coordinator
 
+    // Guards against overlapping SOAP calls: two fast taps could otherwise
+    // dispatch Play then Pause that land out of order. Mirrors the
+    // in-flight pattern GroupEditRow already uses.
+    @State private var busy = false
+
     private var isPlaying: Bool {
         (coordinator.selectedGroup.flatMap { coordinator.playback[$0.id]?.state } ?? .stopped).isActive
     }
@@ -449,14 +507,15 @@ private struct TransportRow: View {
             }
             Spacer()
             HStack(spacing: 24) {
-                transportButton(systemImage: "backward.fill") {
-                    Task { await coordinator.previous() }
+                transportButton(systemImage: "backward.fill", label: "Previous track") {
+                    await coordinator.previous()
                 }
-                transportButton(systemImage: isPlaying ? "pause.fill" : "play.fill", size: 22) {
-                    Task { await coordinator.togglePlayPause() }
+                transportButton(systemImage: isPlaying ? "pause.fill" : "play.fill",
+                                label: isPlaying ? "Pause" : "Play", size: 22) {
+                    await coordinator.togglePlayPause()
                 }
-                transportButton(systemImage: "forward.fill") {
-                    Task { await coordinator.next() }
+                transportButton(systemImage: "forward.fill", label: "Next track") {
+                    await coordinator.next()
                 }
             }
             Spacer()
@@ -464,7 +523,7 @@ private struct TransportRow: View {
                 modeButton(
                     systemImage: coordinator.selectedPlayMode.repeatMode == .one ? "repeat.1" : "repeat",
                     active: coordinator.selectedPlayMode.repeatMode != .off,
-                    help: "Repeat"
+                    help: coordinator.selectedPlayMode.repeatMode == .one ? "Repeat one" : "Repeat"
                 ) {
                     Task { await coordinator.cycleRepeat() }
                 }
@@ -490,17 +549,27 @@ private struct TransportRow: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(active ? "On" : "Off")
     }
 
     @ViewBuilder
-    private func transportButton(systemImage: String, size: CGFloat = 18, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func transportButton(systemImage: String, label: String, size: CGFloat = 18,
+                                 action: @escaping () async -> Void) -> some View {
+        Button {
+            guard !busy else { return }
+            busy = true
+            Task { await action(); busy = false }
+        } label: {
             Image(systemName: systemImage)
                 .font(.system(size: size, weight: .medium))
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(busy)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -524,6 +593,7 @@ private struct VolumeRow: View {
             }
             .buttonStyle(.plain)
             .help(volume.muted ? "Unmute" : "Mute")
+            .accessibilityLabel(volume.muted ? "Unmute group" : "Mute group")
 
             Slider(
                 value: Binding(
@@ -536,6 +606,7 @@ private struct VolumeRow: View {
                 step: 1
             )
             .controlSize(.small)
+            .accessibilityLabel("Group volume")
 
             Text("\(volume.volume)")
                 .font(.caption.monospacedDigit())
@@ -910,6 +981,100 @@ private struct GroupEditRow: View {
     }
 }
 
+// MARK: - EQ
+
+/// Collapsible bass/treble/loudness controls. Bass/treble commit on
+/// drag-release (not every step) so a drag doesn't flood the speaker with
+/// SetBass/SetTreble, the same rate-limit concern the volume Debouncer
+/// exists for. Loudness is a single toggle.
+private struct EQRow: View {
+
+    @Environment(SonosCoordinator.self) private var coordinator
+    @State private var isExpanded = false
+
+    private var eq: EQSettings { coordinator.selectedEQ }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+            } label: {
+                HStack {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(.secondary)
+                    Text("EQ")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Equalizer")
+
+            if isExpanded {
+                VStack(spacing: 6) {
+                    EQSlider(label: "Bass", value: eq.bass) { v in
+                        Task { await coordinator.setBass(v) }
+                    }
+                    EQSlider(label: "Treble", value: eq.treble) { v in
+                        Task { await coordinator.setTreble(v) }
+                    }
+                    Toggle("Loudness", isOn: Binding(
+                        get: { eq.loudness },
+                        set: { v in Task { await coordinator.setLoudness(v) } }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct EQSlider: View {
+    let label: String
+    let value: Int                 // canonical value from the coordinator
+    let commit: (Int) -> Void
+    @State private var preview: Double?
+
+    var body: some View {
+        let shown = preview ?? Double(value)
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .frame(width: 52, alignment: .leading)
+            Slider(
+                value: Binding(get: { shown }, set: { preview = $0 }),
+                in: -10...10,
+                step: 1,
+                onEditingChanged: { editing in
+                    if !editing, let p = preview {
+                        commit(Int(p.rounded()))
+                        preview = nil
+                    }
+                }
+            )
+            .controlSize(.mini)
+            .accessibilityLabel(label)
+            Text("\(Int(shown) > 0 ? "+" : "")\(Int(shown))")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 26, alignment: .trailing)
+        }
+    }
+}
+
 // MARK: - Sleep timer
 
 private struct SleepTimerRow: View {
@@ -1108,6 +1273,7 @@ private struct FavoriteRow: View {
                     }
                     .buttonStyle(.plain)
                     .help(isPinned ? "Unpin" : "Pin to top")
+                    .accessibilityLabel(isPinned ? "Unpin favorite" : "Pin favorite to top")
                 }
 
                 Image(systemName: favorite.isPlayable ? "play.circle" : "slash.circle")

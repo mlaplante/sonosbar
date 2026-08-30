@@ -473,6 +473,12 @@ final class SonosCoordinator {
         Task { await refreshSelectedGroup() }
     }
 
+    /// Dismisses the current transport error from the footer. The error
+    /// otherwise only clears on the next successful action.
+    func clearLastError() {
+        lastError = nil
+    }
+
     // MARK: - Transport actions
 
     func play() async {

@@ -52,7 +52,21 @@ private struct MenuBarLabel: View {
                 Text(title)
             }
         }
-        .accessibilityLabel("SonosBar")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        switch state {
+        case .offline:
+            return "SonosBar — no speakers found"
+        case .idle:
+            return "SonosBar — not playing"
+        case .playing:
+            if let zone = coordinator.selectedGroup?.displayName {
+                return "SonosBar — playing in \(zone)"
+            }
+            return "SonosBar — playing"
+        }
     }
 
     private var state: SonosBarIcon.State {
