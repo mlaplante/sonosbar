@@ -280,6 +280,34 @@ expect(UpdateSignature.verify(manifestBytes: manifestBytes,
                               publicKeyBase64: sigTestPub + "\n"),
        "public key with trailing newline still verifies")
 
+// MARK: - UpdateChecker.evaluate (signed-manifest gate)
+
+expect(UpdateChecker.evaluate(manifestBytes: manifestBytes,
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub,
+                              currentVersion: "0.5.1")?.version == "0.6.0",
+       "evaluate accepts newer signed manifest")
+expect(UpdateChecker.evaluate(manifestBytes: manifestBytes,
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub,
+                              currentVersion: "0.6.0") == nil,
+       "evaluate rejects same version")
+expect(UpdateChecker.evaluate(manifestBytes: manifestBytes,
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub,
+                              currentVersion: "0.7.0") == nil,
+       "evaluate rejects older manifest (no downgrade)")
+expect(UpdateChecker.evaluate(manifestBytes: manifestBytes,
+                              signatureBase64: attackerSig,
+                              publicKeyBase64: sigTestPub,
+                              currentVersion: "0.5.1") == nil,
+       "evaluate rejects bad signature even when version is newer")
+expect(UpdateChecker.evaluate(manifestBytes: Data("{}".utf8),
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub,
+                              currentVersion: "0.5.1") == nil,
+       "evaluate rejects signature/content mismatch")
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")

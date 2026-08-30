@@ -2,10 +2,14 @@
 //  UpdateChecker.swift
 //  SonosBar
 //
-//  Compares the running version against the newest GitHub release and
-//  exposes `updateAvailable` for the footer badge. Checks once at launch
-//  and every 24h after; failures are silent — an update hint is a
-//  nicety, never worth an error surface.
+//  Finds out whether a newer release exists. Primary path: fetch the
+//  Ed25519-signed manifest (appcast.json + .sig) from the release feed,
+//  verify it against SBUpdatePublicKey, and expose `verifiedManifest`
+//  for the in-app installer. Fallback path (no key configured, or any
+//  fetch/verify failure): the legacy GitHub API check, which can only
+//  offer "open the releases page". Checks once at launch and every 24h;
+//  failures are silent — an update hint is a nicety, never worth an
+//  error surface.
 //
 
 import Foundation
@@ -17,6 +21,28 @@ final class UpdateChecker {
 
     private(set) var latestVersion: String?
     private(set) var releaseURL: URL?
+
+    /// Non-nil only when a signed manifest fetched from the feed verified
+    /// against SBUpdatePublicKey and advertises a newer version. This is
+    /// the gate for the in-app install path; the legacy fields above only
+    /// gate the "open the releases page" badge.
+    private(set) var verifiedManifest: UpdateManifest?
+
+    /// Embedded verification key (base64, 32 bytes). Empty until release
+    /// keys are generated; empty disables the signed path entirely.
+    let publicKey =
+        Bundle.main.infoDictionary?["SBUpdatePublicKey"] as? String ?? ""
+
+    /// Release feed location. The UserDefaults override exists for the
+    /// end-to-end test harness (scripts/test-update-e2e.sh) — a debug
+    /// hook, deliberately undocumented in user-facing surfaces.
+    var feedURL: URL? {
+        if let override = UserDefaults.standard.string(forKey: "debug.updateFeedURL") {
+            return URL(string: override)
+        }
+        return (Bundle.main.infoDictionary?["SBUpdateFeedURL"] as? String)
+            .flatMap(URL.init(string:))
+    }
 
     let currentVersion =
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -39,6 +65,68 @@ final class UpdateChecker {
     }
 
     func check() async {
+        if !publicKey.isEmpty, let feedURL, await checkSignedFeed(feedURL) {
+            return
+        }
+        verifiedManifest = nil
+        await legacyCheck()
+    }
+
+    /// Returns true only if a manifest was fetched AND verified AND is
+    /// newer — the caller falls back to the legacy path otherwise. The
+    /// distinction matters: "feed unreachable" must not hide an update
+    /// the legacy path could still surface.
+    private func checkSignedFeed(_ feed: URL) async -> Bool {
+        guard let sigURL = URL(string: feed.absoluteString + ".sig") else { return false }
+        var manifestRequest = URLRequest(url: feed, timeoutInterval: 10)
+        manifestRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        var sigRequest = URLRequest(url: sigURL, timeoutInterval: 10)
+        sigRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (manifestBytes, mResponse) = try? await URLSession.shared.data(for: manifestRequest),
+              (mResponse as? HTTPURLResponse)?.statusCode == 200,
+              let (sigBytes, sResponse) = try? await URLSession.shared.data(for: sigRequest),
+              (sResponse as? HTTPURLResponse)?.statusCode == 200,
+              let signature = String(data: sigBytes, encoding: .utf8)
+        else { return false }
+
+        guard let manifest = Self.evaluate(manifestBytes: manifestBytes,
+                                           signatureBase64: signature,
+                                           publicKeyBase64: publicKey,
+                                           currentVersion: currentVersion)
+        else {
+            // Verified-and-current is also a successful outcome: an older
+            // or equal signed manifest means there IS no update.
+            if UpdateSignature.verify(manifestBytes: manifestBytes,
+                                      signatureBase64: signature,
+                                      publicKeyBase64: publicKey) {
+                verifiedManifest = nil
+                latestVersion = nil
+                return true
+            }
+            return false
+        }
+        verifiedManifest = manifest
+        latestVersion = manifest.version
+        releaseURL = manifest.releaseNotesURL
+        return true
+    }
+
+    /// Pure decision core, separated for the test harness: signature over
+    /// raw bytes first, strict decode second, version gate third.
+    static func evaluate(manifestBytes: Data,
+                         signatureBase64: String,
+                         publicKeyBase64: String,
+                         currentVersion: String) -> UpdateManifest? {
+        guard UpdateSignature.verify(manifestBytes: manifestBytes,
+                                     signatureBase64: signatureBase64,
+                                     publicKeyBase64: publicKeyBase64),
+              let manifest = try? UpdateManifest.decode(manifestBytes),
+              version(manifest.version, isNewerThan: currentVersion)
+        else { return nil }
+        return manifest
+    }
+
+    func legacyCheck() async {
         guard let url = URL(string: "https://api.github.com/repos/mlaplante/sonosbar/releases/latest") else { return }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
