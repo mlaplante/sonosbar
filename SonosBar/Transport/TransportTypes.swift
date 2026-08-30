@@ -38,6 +38,53 @@ struct TrackInfo: Sendable, Equatable {
     var position: TimeInterval = 0
     /// URI of the current track. Useful for "is this still the same track?"
     var trackURI: String = ""
+    /// 1-based position in the play queue (GetPositionInfo <Track>).
+    /// 0 when nothing is queued (radio streams, line-in).
+    var queueIndex: Int = 0
+}
+
+/// One entry of the play queue (ContentDirectory "Q:0").
+struct QueueItem: Sendable, Equatable, Identifiable {
+    /// 1-based queue position — what AVTransport Seek(TRACK_NR) expects.
+    let index: Int
+    let title: String
+    let artist: String
+    let album: String
+    let albumArtURL: URL?
+
+    var id: Int { index }
+}
+
+/// Shuffle/repeat decomposition of Sonos's single PlayMode string.
+struct PlayMode: Sendable, Equatable {
+    enum RepeatMode: Sendable, Equatable { case off, all, one }
+
+    var shuffle: Bool = false
+    var repeatMode: RepeatMode = .off
+
+    init() {}
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "REPEAT_ALL":         (shuffle, repeatMode) = (false, .all)
+        case "REPEAT_ONE":         (shuffle, repeatMode) = (false, .one)
+        case "SHUFFLE_NOREPEAT":   (shuffle, repeatMode) = (true, .off)
+        case "SHUFFLE":            (shuffle, repeatMode) = (true, .all)
+        case "SHUFFLE_REPEAT_ONE": (shuffle, repeatMode) = (true, .one)
+        default:                   (shuffle, repeatMode) = (false, .off)
+        }
+    }
+
+    var rawValue: String {
+        switch (shuffle, repeatMode) {
+        case (false, .off): return "NORMAL"
+        case (false, .all): return "REPEAT_ALL"
+        case (false, .one): return "REPEAT_ONE"
+        case (true, .off):  return "SHUFFLE_NOREPEAT"
+        case (true, .all):  return "SHUFFLE"
+        case (true, .one):  return "SHUFFLE_REPEAT_ONE"
+        }
+    }
 }
 
 /// Current playback state + the track it applies to.

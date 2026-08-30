@@ -38,6 +38,9 @@ protocol SonosTransport: Sendable {
 
     func playbackSnapshot(of player: DiscoveredPlayer) async throws -> PlaybackSnapshot
 
+    /// Jumps to the 1-based queue position on the player's current queue.
+    func seek(toTrack index: Int, on player: DiscoveredPlayer) async throws
+
     // MARK: - Volume (RenderingControl service)
 
     func getVolume(of player: DiscoveredPlayer) async throws -> VolumeSnapshot
@@ -62,6 +65,18 @@ protocol SonosTransport: Sendable {
 
     func getFavorites(via player: DiscoveredPlayer) async throws -> [SonosFavorite]
     func play(favorite: SonosFavorite, on player: DiscoveredPlayer) async throws
+
+    // MARK: - Queue (ContentDirectory service)
+
+    /// The group's current play queue. Ask the group COORDINATOR — the
+    /// queue lives on it; members return their own (empty) queues.
+    func getQueue(via player: DiscoveredPlayer) async throws -> [QueueItem]
+
+    // MARK: - Play mode (AVTransport service)
+
+    func getPlayMode(of player: DiscoveredPlayer) async throws -> (mode: PlayMode, crossfade: Bool)
+    func setPlayMode(_ mode: PlayMode, on player: DiscoveredPlayer) async throws
+    func setCrossfade(_ enabled: Bool, on player: DiscoveredPlayer) async throws
 
     // MARK: - Sleep timer (AVTransport service) — chunk 10
 

@@ -38,6 +38,9 @@ jobs:
           swift --version
           xcodebuild -version
 
+      - name: Run parser tests
+        run: ./scripts/run-parser-tests.sh
+
       - name: Build .app (release, ad-hoc signed)
         run: ./scripts/build-app.sh release
 

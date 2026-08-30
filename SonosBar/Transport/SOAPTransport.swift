@@ -94,6 +94,19 @@ struct SOAPTransport: SonosTransport {
         return PlaybackSnapshot(state: state, track: track)
     }
 
+    func seek(toTrack index: Int, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "Seek",
+            service: .avTransport,
+            arguments: [
+                ("InstanceID", "0"),
+                ("Unit", "TRACK_NR"),
+                ("Target", "\(max(1, index))")
+            ],
+            to: player
+        )
+    }
+
     // MARK: - Volume
 
     func getVolume(of player: DiscoveredPlayer) async throws -> VolumeSnapshot {
@@ -159,6 +172,56 @@ struct SOAPTransport: SonosTransport {
         }
         let stateRoot = try XMLNode.parse(stateText)
         return Self.parseZoneGroups(from: stateRoot)
+    }
+
+    // MARK: - Queue
+
+    func getQueue(via player: DiscoveredPlayer) async throws -> [QueueItem] {
+        var items: [QueueItem] = []
+        var startingIndex = 0
+        let pageSize = 200
+
+        // Same paging contract as favorites; queues cap at 1000 tracks on
+        // current firmware, so the bound is generous.
+        for _ in 0..<10 {
+            let response = try await client.send(
+                action: "Browse",
+                service: .contentDirectory,
+                arguments: [
+                    ("ObjectID", "Q:0"),
+                    ("BrowseFlag", "BrowseDirectChildren"),
+                    ("Filter", "*"),
+                    ("StartingIndex", "\(startingIndex)"),
+                    ("RequestedCount", "\(pageSize)"),
+                    ("SortCriteria", "")
+                ],
+                to: player
+            )
+            guard let didlText = response.descendants(named: "Result").first?.trimmed,
+                  !didlText.isEmpty else { break }
+            let didl = try XMLNode.parse(didlText)
+            items += Self.parseQueueItems(from: didl, startingAt: startingIndex + 1, baseURL: player.baseURL)
+
+            let returned = Int(response.descendants(named: "NumberReturned").first?.trimmed ?? "0") ?? 0
+            let total = Int(response.descendants(named: "TotalMatches").first?.trimmed ?? "0") ?? 0
+            startingIndex += returned
+            if returned == 0 || startingIndex >= total { break }
+        }
+        return items
+    }
+
+    // Internal (not private) so the parser test harness can exercise it.
+    static func parseQueueItems(from didl: XMLNode, startingAt firstIndex: Int, baseURL: URL) -> [QueueItem] {
+        return didl.descendants(named: "item").enumerated().map { offset, item in
+            let art = item.descendants(named: "albumArtURI").first?.trimmed
+            return QueueItem(
+                index: firstIndex + offset,
+                title: item.descendants(named: "title").first?.trimmed ?? "",
+                artist: item.descendants(named: "creator").first?.trimmed ?? "",
+                album: item.descendants(named: "album").first?.trimmed ?? "",
+                albumArtURL: art.flatMap { $0.isEmpty ? nil : URL(string: $0, relativeTo: baseURL)?.absoluteURL }
+            )
+        }
     }
 
     // MARK: - Grouping
@@ -237,19 +300,40 @@ struct SOAPTransport: SonosTransport {
         return favorites
     }
 
-    private static func parseFavorites(from didl: XMLNode, player: DiscoveredPlayer) -> [SonosFavorite] {
+    // Internal (not private) so the parser test harness can exercise it.
+    static func parseFavorites(from didl: XMLNode, player: DiscoveredPlayer) -> [SonosFavorite] {
         return didl.descendants(named: "item").compactMap { item -> SonosFavorite? in
             let title = item.descendants(named: "title").first?.trimmed ?? ""
 
-            // The favorite's playable URI is in <res> of the item.
-            // The "real" metadata for SetAVTransportURI is in the
-            // <r:resMD> ("r:" is Sonos's resource-metadata namespace).
-            guard let res = item.first("res")?.trimmed, !res.isEmpty else { return nil }
-
             // <r:resMD> contains an escaped DIDL document we want to
             // pass through verbatim to SetAVTransportURI.
-            let metadata = item.descendants(named: "resMD").first?.trimmed
-                ?? Self.synthesizeDIDL(title: title, uri: res)
+            let resMD = item.descendants(named: "resMD").first?.trimmed
+
+            // The favorite's playable URI is usually in <res> of the item —
+            // but container-style favorites (Sonos Radio category pages and
+            // the like) ship an EMPTY <res>. Some of those carry a real URI
+            // inside the resMD DIDL; the rest have only a container id, and
+            // the speaker rejects every URI built from it with UPnP 714
+            // (verified live) — those are listed as unplayable rather than
+            // silently dropped, which used to hide most of the Favorites
+            // tab (caught by the parser tests).
+            var res = item.first("res")?.trimmed ?? ""
+            var isPlayable = !res.isEmpty
+            if res.isEmpty,
+               let resMD,
+               let mdRoot = try? XMLNode.parse(resMD),
+               let innerItem = mdRoot.descendants(named: "item").first {
+                if let innerRes = innerItem.first("res")?.trimmed, !innerRes.isEmpty {
+                    res = innerRes
+                    isPlayable = true
+                } else if let id = innerItem.attributes["id"], !id.isEmpty {
+                    // Unique identifier for the row; never sent to a speaker.
+                    res = "x-rincon-cpcontainer:" + id
+                }
+            }
+            guard !res.isEmpty else { return nil }
+
+            let metadata = resMD ?? Self.synthesizeDIDL(title: title, uri: res)
 
             let albumArt: URL? = {
                 if let art = item.descendants(named: "albumArtURI").first?.trimmed, !art.isEmpty {
@@ -262,7 +346,8 @@ struct SOAPTransport: SonosTransport {
                 title: title,
                 uri: res,
                 albumArtURL: albumArt,
-                metadata: metadata
+                metadata: metadata,
+                isPlayable: isPlayable
             )
         }
     }
@@ -297,6 +382,45 @@ struct SOAPTransport: SonosTransport {
           </item>
         </DIDL-Lite>
         """#
+    }
+
+    // MARK: - Play mode
+
+    func getPlayMode(of player: DiscoveredPlayer) async throws -> (mode: PlayMode, crossfade: Bool) {
+        async let settingsTask = client.send(
+            action: "GetTransportSettings",
+            service: .avTransport,
+            arguments: [("InstanceID", "0")],
+            to: player
+        )
+        async let crossfadeTask = client.send(
+            action: "GetCrossfadeMode",
+            service: .avTransport,
+            arguments: [("InstanceID", "0")],
+            to: player
+        )
+        let (settingsXML, crossfadeXML) = try await (settingsTask, crossfadeTask)
+        let raw = settingsXML.descendants(named: "PlayMode").first?.trimmed ?? "NORMAL"
+        let crossfade = crossfadeXML.descendants(named: "CrossfadeMode").first?.trimmed == "1"
+        return (PlayMode(rawValue: raw), crossfade)
+    }
+
+    func setPlayMode(_ mode: PlayMode, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetPlayMode",
+            service: .avTransport,
+            arguments: [("InstanceID", "0"), ("NewPlayMode", mode.rawValue)],
+            to: player
+        )
+    }
+
+    func setCrossfade(_ enabled: Bool, on player: DiscoveredPlayer) async throws {
+        _ = try await client.send(
+            action: "SetCrossfadeMode",
+            service: .avTransport,
+            arguments: [("InstanceID", "0"), ("CrossfadeMode", enabled ? "1" : "0")],
+            to: player
+        )
     }
 
     // MARK: - Sleep timer (chunk 10)
@@ -352,6 +476,7 @@ struct SOAPTransport: SonosTransport {
         track.duration = parseDuration(body.first("TrackDuration")?.trimmed ?? "0:00:00")
         track.position = parseDuration(body.first("RelTime")?.trimmed ?? "0:00:00")
         track.trackURI = body.first("TrackURI")?.trimmed ?? ""
+        track.queueIndex = Int(body.first("Track")?.trimmed ?? "0") ?? 0
 
         return track
     }

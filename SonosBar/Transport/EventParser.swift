@@ -32,6 +32,8 @@ enum EventParser {
         var state: PlaybackState?
         var currentTrackURI: String?
         var trackMetadata: String?    // Raw DIDL — parse on demand if needed.
+        var playMode: PlayMode?
+        var crossfade: Bool?
     }
 
     /// Decoded ZoneGroupTopology event — full topology in <ZoneGroupState>.
@@ -71,6 +73,12 @@ enum EventParser {
         }
         if let m = inner.descendants(named: "CurrentTrackMetaData").first?.attributes["val"] {
             event.trackMetadata = m
+        }
+        if let pm = inner.descendants(named: "CurrentPlayMode").first?.attributes["val"] {
+            event.playMode = PlayMode(rawValue: pm)
+        }
+        if let cf = inner.descendants(named: "CurrentCrossfadeMode").first?.attributes["val"] {
+            event.crossfade = (cf == "1")
         }
         return event
     }

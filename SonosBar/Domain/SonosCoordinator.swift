@@ -58,6 +58,17 @@ final class SonosCoordinator {
     private(set) var favorites: [SonosFavorite] = []
     private(set) var favoritesLoading = false
 
+    // MARK: - Queue
+    /// Play queue of the selected group's coordinator, loaded on demand
+    /// when the Queue tab opens.
+    private(set) var queue: [QueueItem] = []
+    private(set) var queueLoading = false
+
+    // MARK: - Play mode
+    /// Shuffle/repeat and crossfade keyed by group ID.
+    private(set) var playModes: [String: PlayMode] = [:]
+    private(set) var crossfades: [String: Bool] = [:]
+
     // MARK: - Dependencies
 
     private let discovery: SSDPDiscovery
@@ -297,6 +308,9 @@ final class SonosCoordinator {
         guard let decoded = try? EventParser.avTransport(from: body) else { return }
         guard let group = groups.first(where: { $0.coordinatorUUID == uuid }) else { return }
 
+        if let pm = decoded.playMode { playModes[group.id] = pm }
+        if let cf = decoded.crossfade { crossfades[group.id] = cf }
+
         var snap = playback[group.id] ?? PlaybackSnapshot()
         if let s = decoded.state { snap.state = s }
         if let uri = decoded.currentTrackURI, uri != snap.track.trackURI {
@@ -380,10 +394,13 @@ final class SonosCoordinator {
               let coord = coordinator(of: group) else { return }
         async let playbackTask = transport.playbackSnapshot(of: coord)
         async let volumeTask = transport.getVolume(of: coord)
+        async let playModeTask = transport.getPlayMode(of: coord)
         do {
-            let (p, v) = try await (playbackTask, volumeTask)
+            let (p, v, pm) = try await (playbackTask, volumeTask, playModeTask)
             self.playback[group.id] = p
             self.volumes[group.id] = v
+            self.playModes[group.id] = pm.mode
+            self.crossfades[group.id] = pm.crossfade
             self.lastError = nil
         } catch is CancellationError {
             // Lifecycle cancellation — not a real failure.
@@ -513,6 +530,34 @@ final class SonosCoordinator {
         }
     }
 
+    // MARK: - Queue
+
+    func loadQueue() async {
+        guard let group = selectedGroup,
+              let coord = coordinator(of: group) else {
+            queue = []
+            return
+        }
+        queueLoading = true
+        defer { queueLoading = false }
+        do {
+            queue = try await transport.getQueue(via: coord)
+        } catch is CancellationError {
+        } catch {
+            Log.domain.error("Queue load failed")
+            queue = []
+        }
+    }
+
+    /// Jumps playback to the given 1-based queue position and plays.
+    func play(queueIndex: Int) async {
+        await runOnSelectedCoordinator {
+            try await self.transport.seek(toTrack: queueIndex, on: $0)
+            try await self.transport.play(on: $0)
+        }
+        await refreshSelectedGroup()
+    }
+
     // MARK: - Grouping
 
     /// Pulls the zone identified by `memberUUID` into the selected group.
@@ -552,6 +597,72 @@ final class SonosCoordinator {
             lastError = error
         } catch {
             Log.domain.error("Leave group failed")
+        }
+        await refreshTopology()
+    }
+
+    // MARK: - Play mode actions
+
+    var selectedPlayMode: PlayMode {
+        selectedGroupID.flatMap { playModes[$0] } ?? PlayMode()
+    }
+
+    var selectedCrossfade: Bool {
+        selectedGroupID.flatMap { crossfades[$0] } ?? false
+    }
+
+    func toggleShuffle() async {
+        var mode = selectedPlayMode
+        mode.shuffle.toggle()
+        await apply(playMode: mode)
+    }
+
+    func cycleRepeat() async {
+        var mode = selectedPlayMode
+        switch mode.repeatMode {
+        case .off: mode.repeatMode = .all
+        case .all: mode.repeatMode = .one
+        case .one: mode.repeatMode = .off
+        }
+        await apply(playMode: mode)
+    }
+
+    private func apply(playMode: PlayMode) async {
+        guard let group = selectedGroup else { return }
+        playModes[group.id] = playMode   // optimistic; event confirms
+        await runOnSelectedCoordinator { try await self.transport.setPlayMode(playMode, on: $0) }
+    }
+
+    func toggleCrossfade() async {
+        guard let group = selectedGroup else { return }
+        let target = !selectedCrossfade
+        crossfades[group.id] = target
+        await runOnSelectedCoordinator { try await self.transport.setCrossfade(target, on: $0) }
+    }
+
+    // MARK: - Group all / ungroup all
+
+    /// Pulls every visible zone in the household into the selected group.
+    func groupAll() async {
+        guard let group = selectedGroup else { return }
+        let outsiders = groups
+            .filter { $0.id != group.id }
+            .flatMap(\.visibleMembers)
+        for member in outsiders {
+            if let player = players[member.uuid] {
+                try? await transport.join(player: player, toCoordinatorUUID: group.coordinatorUUID)
+            }
+        }
+        await refreshTopology()
+    }
+
+    /// Splits every non-coordinator zone out of the selected group.
+    func ungroupAll() async {
+        guard let group = selectedGroup else { return }
+        for member in group.visibleMembers where member.uuid != group.coordinatorUUID {
+            if let player = players[member.uuid] {
+                try? await transport.leaveGroup(player: player)
+            }
         }
         await refreshTopology()
     }
@@ -645,6 +756,10 @@ final class SonosCoordinator {
     }
 
     func play(favorite: SonosFavorite) async {
+        guard favorite.isPlayable else {
+            lastError = .invalidArgument("\"\(favorite.title)\" can only be played from the Sonos app")
+            return
+        }
         guard let group = selectedGroup,
               let coord = coordinator(of: group) else { return }
         do {

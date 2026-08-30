@@ -30,4 +30,12 @@ struct SonosFavorite: Sendable, Hashable, Identifiable {
     /// without it, queue-based favorites won't play correctly. We capture
     /// it as raw XML and pass it through opaquely.
     let metadata: String
+
+    /// Whether this favorite can be started from a LAN client at all.
+    /// Container-style favorites that carry no playable URI anywhere
+    /// (Sonos Radio category pages, for example) are rejected by the
+    /// speaker with UPnP 714 no matter how the URI is constructed —
+    /// verified live. They're listed but disabled, instead of being
+    /// silently dropped as before.
+    let isPlayable: Bool
 }

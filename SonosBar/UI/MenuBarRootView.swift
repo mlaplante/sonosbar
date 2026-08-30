@@ -29,12 +29,14 @@ import SwiftUI
 
 private enum Tab: Hashable {
     case nowPlaying
+    case queue
     case favorites
 }
 
 struct MenuBarRootView: View {
 
     @Environment(SonosCoordinator.self) private var coordinator
+    @Environment(UpdateChecker.self) private var updates
 
     @State private var tab: Tab = .nowPlaying
     @State private var isZonePickerExpanded = false
@@ -54,6 +56,8 @@ struct MenuBarRootView: View {
                 switch tab {
                 case .nowPlaying:
                     nowPlayingContent
+                case .queue:
+                    QueueList()
                 case .favorites:
                     favoritesContent
                 }
@@ -70,6 +74,7 @@ struct MenuBarRootView: View {
     private var tabBar: some View {
         HStack(spacing: 0) {
             tabButton("Now Playing", tab: .nowPlaying, symbol: "play.square")
+            tabButton("Queue", tab: .queue, symbol: "list.bullet")
             tabButton("Favorites", tab: .favorites, symbol: "star")
         }
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -173,6 +178,24 @@ struct MenuBarRootView: View {
                     help: "Re-scan for speakers"
                 ) {
                     Task { await coordinator.refresh() }
+                }
+
+                if updates.updateAvailable, let url = updates.releaseURL {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.down.circle.fill")
+                            Text(updates.latestVersion.map { "v\($0)" } ?? "Update")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("A newer SonosBar release is available")
                 }
 
                 Spacer()
@@ -413,19 +436,57 @@ private struct TransportRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 24) {
-            Spacer()
-            transportButton(systemImage: "backward.fill") {
-                Task { await coordinator.previous() }
-            }
-            transportButton(systemImage: isPlaying ? "pause.fill" : "play.fill", size: 22) {
-                Task { await coordinator.togglePlayPause() }
-            }
-            transportButton(systemImage: "forward.fill") {
-                Task { await coordinator.next() }
+        HStack(spacing: 0) {
+            modeButton(
+                systemImage: "shuffle",
+                active: coordinator.selectedPlayMode.shuffle,
+                help: "Shuffle"
+            ) {
+                Task { await coordinator.toggleShuffle() }
             }
             Spacer()
+            HStack(spacing: 24) {
+                transportButton(systemImage: "backward.fill") {
+                    Task { await coordinator.previous() }
+                }
+                transportButton(systemImage: isPlaying ? "pause.fill" : "play.fill", size: 22) {
+                    Task { await coordinator.togglePlayPause() }
+                }
+                transportButton(systemImage: "forward.fill") {
+                    Task { await coordinator.next() }
+                }
+            }
+            Spacer()
+            HStack(spacing: 2) {
+                modeButton(
+                    systemImage: coordinator.selectedPlayMode.repeatMode == .one ? "repeat.1" : "repeat",
+                    active: coordinator.selectedPlayMode.repeatMode != .off,
+                    help: "Repeat"
+                ) {
+                    Task { await coordinator.cycleRepeat() }
+                }
+                modeButton(
+                    systemImage: "arrow.triangle.2.circlepath",
+                    active: coordinator.selectedCrossfade,
+                    help: "Crossfade"
+                ) {
+                    Task { await coordinator.toggleCrossfade() }
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func modeButton(systemImage: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(active ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     @ViewBuilder
@@ -627,6 +688,85 @@ private struct ZonePicker: View {
     }
 }
 
+// MARK: - Queue list
+
+private struct QueueList: View {
+
+    @Environment(SonosCoordinator.self) private var coordinator
+
+    private var currentIndex: Int {
+        coordinator.selectedGroup.flatMap { coordinator.playback[$0.id]?.track.queueIndex } ?? 0
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if coordinator.queueLoading && coordinator.queue.isEmpty {
+                ProgressView().controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+            } else if coordinator.queue.isEmpty {
+                Text("The queue is empty. Radio stations and line-in don't use the queue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(coordinator.queue) { item in
+                            queueRow(item)
+                        }
+                    }
+                }
+                .frame(maxHeight: 320)
+            }
+        }
+        // Reload whenever the tab appears or the selected zone changes.
+        .task(id: coordinator.selectedGroupID) {
+            await coordinator.loadQueue()
+        }
+    }
+
+    @ViewBuilder
+    private func queueRow(_ item: QueueItem) -> some View {
+        let isCurrent = item.index == currentIndex
+        Button {
+            Task { await coordinator.play(queueIndex: item.index) }
+        } label: {
+            HStack(spacing: 8) {
+                if isCurrent {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                        .frame(width: 20)
+                } else {
+                    Text("\(item.index)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 20, alignment: .trailing)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.callout)
+                        .fontWeight(isCurrent ? .semibold : .regular)
+                        .lineLimit(1)
+                    if !item.artist.isEmpty {
+                        Text(item.artist)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Group editor
 
 /// Join/leave controls for the selected group: every visible zone with a
@@ -692,8 +832,21 @@ private struct GroupEditRow: View {
                         ForEach(candidates) { candidate in
                             candidateRow(candidate)
                         }
+                        HStack(spacing: 8) {
+                            bulkButton("Group all") {
+                                Task { await coordinator.groupAll() }
+                            }
+                            .disabled(candidates.allSatisfy(\.inSelectedGroup))
+                            bulkButton("Ungroup all") {
+                                Task { await coordinator.ungroupAll() }
+                            }
+                            .disabled(candidates.count(where: { $0.inSelectedGroup }) <= 1)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 4)
                     }
-                    .padding(.bottom, 4)
+                    .padding(.bottom, 6)
                 }
             }
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -739,6 +892,16 @@ private struct GroupEditRow: View {
         }
         .buttonStyle(.plain)
         .disabled(candidate.isAnchor)
+    }
+
+    @ViewBuilder
+    private func bulkButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption2)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
     }
 }
 
@@ -942,14 +1105,17 @@ private struct FavoriteRow: View {
                     .help(isPinned ? "Unpin" : "Pin to top")
                 }
 
-                Image(systemName: "play.circle")
+                Image(systemName: favorite.isPlayable ? "play.circle" : "slash.circle")
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
+            .opacity(favorite.isPlayable ? 1 : 0.45)
         }
         .buttonStyle(.plain)
+        .disabled(!favorite.isPlayable)
+        .help(favorite.isPlayable ? "" : "This favorite can only be played from the Sonos app")
         .onHover { hovering = $0 }
     }
 

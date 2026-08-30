@@ -22,6 +22,7 @@ struct SonosBarApp: App {
         MenuBarExtra {
             MenuBarRootView()
                 .environment(appDelegate.coordinator)
+                .environment(appDelegate.updates)
         } label: {
             MenuBarLabel()
                 .environment(appDelegate.coordinator)
@@ -143,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = SonosCoordinator()
     let nowPlaying = NowPlayingBridge()
     let hotkeys = GlobalHotkeyManager()
+    let updates = UpdateChecker()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         nowPlaying.attach(to: coordinator)
@@ -162,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { await coordinator.bootstrap() }
+        updates.start()
     }
 
     private var hasRepliedToTerminate = false
