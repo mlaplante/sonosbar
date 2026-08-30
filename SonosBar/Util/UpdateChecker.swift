@@ -28,6 +28,13 @@ final class UpdateChecker {
     /// gate the "open the releases page" badge.
     private(set) var verifiedManifest: UpdateManifest?
 
+    /// E2E harness seam (scripts/test-update-e2e.sh): lets checkSignedFeed
+    /// trigger an install without the popover ever opening. Weak, and
+    /// wired by AppDelegate — UpdateChecker does not own an installer in
+    /// production; this exists solely so a headless run of the debug
+    /// auto-install flag has somewhere to call.
+    weak var installer: UpdateInstaller?
+
     /// Embedded verification key (base64, 32 bytes). Empty until release
     /// keys are generated; empty disables the signed path entirely.
     let publicKey =
@@ -116,6 +123,13 @@ final class UpdateChecker {
         verifiedManifest = manifest
         latestVersion = manifest.version
         releaseURL = manifest.releaseNotesURL
+
+        // E2E harness seam (scripts/test-update-e2e.sh): install without a
+        // click. The popover-gated UpdateCard hook can't fire headless.
+        if UserDefaults.standard.bool(forKey: "debug.updateAutoInstall") {
+            let installer = self.installer
+            Task { @MainActor in await installer?.install(manifest: manifest) }
+        }
         return true
     }
 
