@@ -200,14 +200,10 @@ final class UpdateInstaller {
             // actor that must send the reply (found via E2E + sample).
             // Graceful cleanup, then a plain exit — the helper only needs
             // this PID to die.
-            if let prepareForTermination {
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask { @MainActor in await prepareForTermination() }
-                    group.addTask { try? await Task.sleep(for: .seconds(5)) }
-                    _ = await group.next()
-                    group.cancelAll()
-                }
-            }
+            // Hard cap mirroring applicationShouldTerminate's watchdog: if
+            // graceful shutdown hangs, exit anyway — the helper is waiting.
+            Task.detached { try? await Task.sleep(for: .seconds(5)); exit(0) }
+            if let prepareForTermination { await prepareForTermination() }
             exit(0)
         } catch let failure as UpdateInstallFailure {
             state = .failed(failure.explanation)
