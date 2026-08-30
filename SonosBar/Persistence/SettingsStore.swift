@@ -53,6 +53,14 @@ final class SettingsStore {
         }
     }
 
+    /// Check the release feed for updates once a day. On by default —
+    /// matches the always-on behavior that predates this toggle.
+    var autoCheckForUpdates: Bool {
+        didSet {
+            Self.defaults.set(autoCheckForUpdates, forKey: Key.autoCheckForUpdates)
+        }
+    }
+
     // MARK: - Operational cache
 
     /// Last selected group ID, used to restore selection on next launch.
@@ -109,6 +117,7 @@ final class SettingsStore {
         self.showTitleInMenuBar  = Self.defaults.bool(forKey: Key.showTitleInMenuBar)
         // rememberLastZone defaults to true (the helpful behaviour).
         self.rememberLastZone    = (Self.defaults.object(forKey: Key.rememberLastZone) as? Bool) ?? true
+        self.autoCheckForUpdates = (Self.defaults.object(forKey: Key.autoCheckForUpdates) as? Bool) ?? true
         self.lastSelectedGroupID = Self.defaults.string(forKey: Key.lastSelectedGroupID)
         self.lastKnownHosts      = (Self.defaults.dictionary(forKey: Key.lastKnownHosts) as? [String: String]) ?? [:]
         let pinnedArray = (Self.defaults.array(forKey: Key.pinnedFavoriteURIs) as? [String]) ?? []
@@ -119,6 +128,7 @@ final class SettingsStore {
         static let launchAtLogin       = "settings.launchAtLogin"
         static let showTitleInMenuBar  = "settings.showTitleInMenuBar"
         static let rememberLastZone    = "settings.rememberLastZone"
+        static let autoCheckForUpdates = "settings.autoCheckForUpdates"
         static let lastSelectedGroupID = "cache.lastSelectedGroupID"
         static let lastKnownHosts      = "cache.lastKnownHosts"
         static let pinnedFavoriteURIs  = "settings.pinnedFavoriteURIs"

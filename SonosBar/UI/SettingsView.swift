@@ -16,6 +16,7 @@ import SwiftUI
 struct SettingsView: View {
 
     @Environment(SonosCoordinator.self) private var coordinator
+    @Environment(UpdateChecker.self) private var updates
 
     var body: some View {
         // @Bindable lets us bind directly to @Observable properties on
@@ -33,6 +34,25 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
             }
 
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $settings.autoCheckForUpdates)
+                    .toggleStyle(.switch)
+                HStack {
+                    Button("Check for Updates…") {
+                        Task { await updates.check() }
+                    }
+                    if let latest = updates.latestVersion, updates.updateAvailable {
+                        Text("\(latest) available — open the SonosBar menu to install")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("SonosBar \(updates.currentVersion) is current")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Global shortcuts") {
                 Text("⌘⌥⌃ P — Play / Pause")
                 Text("⌘⌥⌃ ←/→ — Previous / Next")
@@ -42,7 +62,7 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
 
             Section("About") {
-                Text("SonosBar 0.1.0")
+                Text("SonosBar \(updates.currentVersion)")
                     .font(.callout)
                 Text("Sonos is a trademark of Sonos Inc. SonosBar is an independent project not affiliated with Sonos.")
                     .font(.caption2)

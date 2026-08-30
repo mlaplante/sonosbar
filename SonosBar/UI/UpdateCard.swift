@@ -48,14 +48,26 @@ struct UpdateCard: View {
                 Text(refusal.explanation)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Link("Download from GitHub", destination: manifest.releaseNotesURL)
+                HStack {
+                    Link("Download from GitHub", destination: manifest.releaseNotesURL)
+                        .font(.caption2)
+                    Button("Try Again") {
+                        Task { await installer.install(manifest: manifest) }
+                    }
                     .font(.caption2)
+                }
             case .failed(let message):
                 Text(message)
                     .font(.caption2)
                     .foregroundStyle(.red)
-                Link("Download from GitHub", destination: manifest.releaseNotesURL)
+                HStack {
+                    Link("Download from GitHub", destination: manifest.releaseNotesURL)
+                        .font(.caption2)
+                    Button("Try Again") {
+                        Task { await installer.install(manifest: manifest) }
+                    }
                     .font(.caption2)
+                }
             }
         }
         .padding(10)

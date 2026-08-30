@@ -36,6 +36,7 @@ struct SonosBarApp: App {
         Settings {
             SettingsView()
                 .environment(appDelegate.coordinator)
+                .environment(appDelegate.updates)
         }
     }
 }
@@ -169,6 +170,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updates.start()
         if let failure = installer.consumeLastUpdateError() {
             Log.app.error("Previous update did not complete: \(failure)")
+        }
+
+        // An update swaps the bundle; ad-hoc signatures differ per build,
+        // which can invalidate the SMAppService login-item registration.
+        // If the user wants launch-at-login but the system lost it,
+        // re-register quietly.
+        if coordinator.settings.launchAtLogin && !LaunchAtLogin.isEnabled {
+            LaunchAtLogin.set(enabled: true)
         }
     }
 

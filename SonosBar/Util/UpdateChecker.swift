@@ -58,7 +58,11 @@ final class UpdateChecker {
         pollTask?.cancel()
         pollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                await self?.check()
+                // Respect the settings toggle per-iteration, not at start():
+                // flipping it must take effect without a relaunch.
+                if UserDefaults.standard.object(forKey: "settings.autoCheckForUpdates") as? Bool ?? true {
+                    await self?.check()
+                }
                 try? await Task.sleep(for: .seconds(24 * 60 * 60))
             }
         }
