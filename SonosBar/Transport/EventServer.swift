@@ -26,7 +26,23 @@ actor EventServer {
         let sid: String   // Subscription ID — matches a SUBSCRIBE response.
         let seq: Int      // Sequence number, monotonically increasing per SID.
         let body: Data    // Raw XML; parsing is the subscriber's job.
+        /// Host the NOTIFY arrived from, `%scope`-stripped. nil if the
+        /// endpoint couldn't be read. The coordinator uses this to reject
+        /// a spoofed NOTIFY whose SID it recognises but whose source IP
+        /// isn't the speaker that SID belongs to.
+        var remoteHost: String? = nil
     }
+
+    /// Upper bound on simultaneously-held connections. A GENA burst on a
+    /// topology change plus two subs per speaker across a large household
+    /// is well under this; the cap only exists to stop a LAN host from
+    /// opening sockets without bound and holding buffered request data.
+    private static let maxConnections = 64
+
+    /// A connection that hasn't produced a parseable request within this
+    /// window is dropped — defends against a peer that opens a socket and
+    /// dribbles bytes (or nothing) to pin a ~1MB buffer indefinitely.
+    private static let connectionIdleTimeout: Duration = .seconds(10)
 
     private(set) var port: UInt16 = 0
 
@@ -91,6 +107,11 @@ actor EventServer {
     }
 
     private func accept(_ conn: NWConnection) {
+        guard connections.count < Self.maxConnections else {
+            Log.events.error("Event connection cap (\(Self.maxConnections)) reached; refusing new connection")
+            conn.cancel()
+            return
+        }
         let wrapper = ConnectionWrapper(conn)
         connections.insert(wrapper)
 
@@ -104,6 +125,21 @@ actor EventServer {
         }
         conn.start(queue: .global(qos: .userInitiated))
         readRequest(on: conn, accumulated: Data())
+
+        // Idle-timeout watchdog: if this connection is still open (never
+        // produced a parseable request, so drop() was never called) after
+        // the window, tear it down. A completed request cancels the
+        // connection, which removes the wrapper first, making this a no-op.
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.connectionIdleTimeout)
+            await self?.dropIfPresent(wrapper)
+        }
+    }
+
+    private func dropIfPresent(_ wrapper: ConnectionWrapper) {
+        guard connections.contains(wrapper) else { return }
+        Log.events.debug("Event connection idle-timed out; dropping")
+        drop(wrapper)
     }
 
     private func drop(_ wrapper: ConnectionWrapper) {
@@ -194,6 +230,16 @@ actor EventServer {
         if let len = contentLength, body.count < len { return nil }
         guard let sid else { return nil }
 
-        return Event(sid: sid, seq: seq, body: Data(body))
+        return Event(sid: sid, seq: seq, body: slicedBody(body, contentLength: contentLength))
+    }
+
+    /// Trims the body to the declared Content-Length. A sender that declares
+    /// a short length and then keeps writing (up to the 1MB cap) must not
+    /// hand the excess to the XML parser — only the advertised bytes are the
+    /// request. With no Content-Length, the accumulated body is the request.
+    /// Pure and internal so the parser harness can assert it.
+    static func slicedBody(_ body: some DataProtocol, contentLength: Int?) -> Data {
+        guard let len = contentLength, len >= 0, len < body.count else { return Data(body) }
+        return Data(body.prefix(len))
     }
 }

@@ -173,8 +173,11 @@ actor SOAPClient {
     }
 
     /// XML-escape argument values. Sonos URIs (think Spotify track URIs)
-    /// contain & and < that need escaping.
-    private static func escape(_ s: String) -> String {
+    /// contain & and < that need escaping. Internal (not private) so
+    /// SOAPTransport can escape hand-built DIDL fragments before they
+    /// become a SOAP argument (the outer envelope escape is not enough —
+    /// the speaker un-escapes the argument and re-parses the DIDL).
+    static func escape(_ s: String) -> String {
         var out = ""
         out.reserveCapacity(s.count)
         for c in s {

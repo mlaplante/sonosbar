@@ -165,6 +165,28 @@ actor SSDPDiscovery {
         return locations
     }
 
+    /// True for an IPv4 literal in a private-use or link-local range
+    /// (RFC 1918 + 169.254/16), plus loopback. Rejects public addresses,
+    /// hostnames, and IPv6 literals — Sonos speakers are IPv4 on the LAN,
+    /// and discovery already tolerates a nil result. Pure, harness-tested.
+    static func isPrivateOrLinkLocalIPv4(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        var octets: [Int] = []
+        for p in parts {
+            guard let v = Int(p), (0...255).contains(v), String(v) == String(p) else { return false }
+            octets.append(v)
+        }
+        switch (octets[0], octets[1]) {
+        case (10, _):                      return true   // 10.0.0.0/8
+        case (172, 16...31):               return true   // 172.16.0.0/12
+        case (192, 168):                   return true   // 192.168.0.0/16
+        case (169, 254):                   return true   // 169.254.0.0/16 link-local
+        case (127, _):                     return true   // 127.0.0.0/8 loopback
+        default:                           return false
+        }
+    }
+
     /// Pulls the LOCATION: header value from an SSDP response.
     private static func extractLocation(from response: String) -> URL? {
         for line in response.split(separator: "\r\n", omittingEmptySubsequences: true) {
@@ -194,6 +216,14 @@ actor SSDPDiscovery {
         // alternate paths that we don't parse correctly.
         guard let host = url.host, let port = url.port else {
             Log.discovery.debug("Skipping LOCATION with no host/port: \(url)")
+            return nil
+        }
+        // SSDP is unauthenticated: any LAN host can answer M-SEARCH with a
+        // spoofed LOCATION. Restrict the blind description fetch to private
+        // /link-local IPv4 so a malicious responder can't make us GET an
+        // arbitrary public or off-LAN host (SSRF-style probing).
+        guard Self.isPrivateOrLinkLocalIPv4(host) else {
+            Log.discovery.debug("Skipping LOCATION outside private ranges: \(host)")
             return nil
         }
         guard let descURL = NetHost.httpURL(host: host, port: port, path: "/xml/device_description.xml") else {

@@ -87,6 +87,11 @@ final class XMLNode: @unchecked Sendable {
     static func parse(_ data: Data) throws -> XMLNode {
         let delegate = Delegate()
         let parser = XMLParser(data: data)
+        // Set explicitly, not relied on as defaults: a future refactor that
+        // touches nearby config must not silently re-enable external-entity
+        // resolution (XXE) on attacker-influenced LAN/device XML.
+        parser.shouldResolveExternalEntities = false
+        parser.shouldProcessNamespaces = false
         parser.delegate = delegate
         guard parser.parse() else {
             throw ParseError.invalidXML(underlying: parser.parserError)

@@ -359,6 +359,46 @@ expect(UpdateInstaller.validatePayload(
         manifest: gateManifest, expectedBundleID: "app.sonosbar.SonosBar") == nil,
     "matching payload accepted")
 
+// MARK: - Security guards
+
+// EventServer.slicedBody: trims to declared Content-Length, passes through otherwise.
+expectEqual(EventServer.slicedBody(Data("0123456789".utf8), contentLength: 4),
+            Data("0123".utf8), "slicedBody trims to Content-Length")
+expectEqual(EventServer.slicedBody(Data("0123".utf8), contentLength: nil),
+            Data("0123".utf8), "slicedBody passes through when no Content-Length")
+expectEqual(EventServer.slicedBody(Data("0123".utf8), contentLength: 99),
+            Data("0123".utf8), "slicedBody keeps full body when length exceeds it")
+expectEqual(EventServer.slicedBody(Data("0123".utf8), contentLength: -1),
+            Data("0123".utf8), "slicedBody ignores a negative Content-Length")
+
+// synthesizeDIDL escapes attacker-influenced title/URI before it becomes DIDL.
+do {
+    let didl = SOAPTransport.synthesizeDIDL(title: "A & B <x>", uri: "u?q=1&r=2")
+    expect(didl.contains("A &amp; B &lt;x&gt;"), "synthesizeDIDL escapes the title")
+    expect(didl.contains("u?q=1&amp;r=2"), "synthesizeDIDL escapes the uri")
+    expect(!didl.contains("<x>"), "synthesizeDIDL leaves no raw injected tag")
+}
+
+// UpdateChecker.sanitizedReleaseURL: https + github.com only.
+expect(UpdateChecker.sanitizedReleaseURL("https://github.com/mlaplante/sonosbar") != nil,
+       "sanitizedReleaseURL accepts https github.com")
+expect(UpdateChecker.sanitizedReleaseURL("file:///etc/passwd") == nil,
+       "sanitizedReleaseURL rejects file:")
+expect(UpdateChecker.sanitizedReleaseURL("https://evil.example/x") == nil,
+       "sanitizedReleaseURL rejects a foreign host")
+expect(UpdateChecker.sanitizedReleaseURL("http://github.com/x") == nil,
+       "sanitizedReleaseURL rejects plain http")
+expect(UpdateChecker.sanitizedReleaseURL(nil) == nil,
+       "sanitizedReleaseURL rejects nil")
+
+// SSDPDiscovery.isPrivateOrLinkLocalIPv4: RFC1918 + link-local + loopback only.
+for ok in ["10.0.6.63", "192.168.1.1", "172.16.0.1", "172.31.255.255", "169.254.1.2", "127.0.0.1"] {
+    expect(SSDPDiscovery.isPrivateOrLinkLocalIPv4(ok), "private range accepts \(ok)")
+}
+for bad in ["8.8.8.8", "172.32.0.1", "172.15.0.1", "1.2.3.4", "example.com", "", "10.0.0", "10.0.0.256", "10.0.0.01"] {
+    expect(!SSDPDiscovery.isPrivateOrLinkLocalIPv4(bad), "private range rejects \(bad)")
+}
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")

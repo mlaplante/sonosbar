@@ -158,8 +158,19 @@ final class UpdateChecker {
               let tag = json["tag_name"] as? String else { return }
 
         latestVersion = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-        releaseURL = (json["html_url"] as? String).flatMap(URL.init(string:))
+        // Don't hand an unvalidated URL from the API response to
+        // NSWorkspace.open (which accepts file: and custom schemes).
+        // Allowlist https + github.com; fall back to the canonical page.
+        releaseURL = Self.sanitizedReleaseURL(json["html_url"] as? String)
             ?? URL(string: "https://github.com/mlaplante/sonosbar/releases/latest")
+    }
+
+    /// Accepts only an https URL on github.com; nil for anything else
+    /// (file:, other schemes/hosts, unparseable). Pure, harness-tested.
+    static func sanitizedReleaseURL(_ raw: String?) -> URL? {
+        guard let raw, let url = URL(string: raw),
+              url.scheme == "https", url.host == "github.com" else { return nil }
+        return url
     }
 
     /// Numeric dotted-component comparison; missing components count as 0.

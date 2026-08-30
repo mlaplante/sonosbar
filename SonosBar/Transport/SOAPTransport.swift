@@ -372,12 +372,20 @@ struct SOAPTransport: SonosTransport {
     /// Fallback DIDL when a favorite doesn't carry resMD — synthesises
     /// a minimal envelope so SetAVTransportURI still works for simple
     /// stream URIs (TuneIn radio, line-in).
-    private static func synthesizeDIDL(title: String, uri: String) -> String {
+    // Internal (not private) so the parser harness can assert escaping.
+    static func synthesizeDIDL(title: String, uri: String) -> String {
+        // Escape here: this DIDL is sent as the CurrentURIMetaData argument,
+        // which SOAPClient escapes at the envelope level and the speaker
+        // then un-escapes and re-parses as XML. Without escaping the inner
+        // fields, a favorite title containing `<`/`&` (e.g. a maliciously
+        // named shared playlist) injects DIDL structure into the speaker.
+        let t = SOAPClient.escape(title)
+        let u = SOAPClient.escape(uri)
         return #"""
         <DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">
           <item id="-1" parentID="-1" restricted="true">
-            <dc:title>\#(title)</dc:title>
-            <res>\#(uri)</res>
+            <dc:title>\#(t)</dc:title>
+            <res>\#(u)</res>
             <upnp:class>object.item.audioItem.audioBroadcast</upnp:class>
           </item>
         </DIDL-Lite>
