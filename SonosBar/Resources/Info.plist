@@ -78,5 +78,17 @@
     <!-- Sonos is a trademark of Sonos Inc. SonosBar is not affiliated with Sonos. -->
     <key>NSHumanReadableCopyright</key>
     <string>SonosBar is an independent project. Sonos is a trademark of Sonos Inc.</string>
+
+    <!-- Self-update feed. The public key verifies appcast.json.sig; it is
+         EMPTY until release keys are generated (scripts/
+         generate-update-keys.swift), which disables the in-app update
+         path entirely — the checker falls back to the legacy GitHub API
+         badge. NOT Sparkle's SU* keys: SonosBar rolls its own updater
+         (docs/superpowers/specs/2026-08-30-self-update-design.md). -->
+    <key>SBUpdateFeedURL</key>
+    <string>https://github.com/mlaplante/sonosbar/releases/latest/download/appcast.json</string>
+
+    <key>SBUpdatePublicKey</key>
+    <string></string>
 </dict>
 </plist>

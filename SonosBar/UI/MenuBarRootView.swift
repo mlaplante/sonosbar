@@ -48,6 +48,8 @@ struct MenuBarRootView: View {
         VStack(spacing: 12) {
             tabBar
 
+            UpdateCard()
+
             if coordinator.isInitialising && coordinator.players.isEmpty {
                 initialisingView
             } else if coordinator.players.isEmpty {
@@ -180,7 +182,8 @@ struct MenuBarRootView: View {
                     Task { await coordinator.refresh() }
                 }
 
-                if updates.updateAvailable, let url = updates.releaseURL {
+                if updates.updateAvailable, updates.verifiedManifest == nil,
+                   let url = updates.releaseURL {
                     Button {
                         NSWorkspace.shared.open(url)
                     } label: {

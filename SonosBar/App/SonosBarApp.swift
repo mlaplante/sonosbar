@@ -23,6 +23,7 @@ struct SonosBarApp: App {
             MenuBarRootView()
                 .environment(appDelegate.coordinator)
                 .environment(appDelegate.updates)
+                .environment(appDelegate.installer)
         } label: {
             MenuBarLabel()
                 .environment(appDelegate.coordinator)
@@ -145,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let nowPlaying = NowPlayingBridge()
     let hotkeys = GlobalHotkeyManager()
     let updates = UpdateChecker()
+    let installer = UpdateInstaller()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         nowPlaying.attach(to: coordinator)
@@ -165,6 +167,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { await coordinator.bootstrap() }
         updates.start()
+        if let failure = installer.consumeLastUpdateError() {
+            Log.app.error("Previous update did not complete: \(failure)")
+        }
     }
 
     private var hasRepliedToTerminate = false
