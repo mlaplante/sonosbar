@@ -69,15 +69,19 @@ jobs:
         run: |
           V="${{ steps.ver.outputs.version }}"
           SHA=$(shasum -a 256 "build/SonosBar-$V.app.zip" | awk '{print $1}')
+          [ -n "$SHA" ] || { echo "::error::empty SHA for update payload"; exit 1; }
+          MINOS=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" build/SonosBar.app/Contents/Info.plist)
+          [ -n "$MINOS" ] || { echo "::error::empty minimumSystemVersion for update payload"; exit 1; }
           # Written as one exact byte stream; sign-update.swift signs these
           # raw bytes and UpdateSignature.swift verifies the same bytes, so
           # this file must never be reformatted after this point.
-          printf '{"version":"%s","build":"%s","url":"https://github.com/mlaplante/sonosbar/releases/download/v%s/SonosBar-%s.app.zip","sha256":"%s","bundleIdentifier":"app.sonosbar.SonosBar","minimumSystemVersion":"26.0","releaseNotesURL":"https://github.com/mlaplante/sonosbar/releases/tag/v%s","pubDate":"%s"}' \
-            "$V" "$V" "$V" "$V" "$SHA" "$V" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/appcast.json
+          printf '{"version":"%s","build":"%s","url":"https://github.com/mlaplante/sonosbar/releases/download/v%s/SonosBar-%s.app.zip","sha256":"%s","bundleIdentifier":"app.sonosbar.SonosBar","minimumSystemVersion":"%s","releaseNotesURL":"https://github.com/mlaplante/sonosbar/releases/tag/v%s","pubDate":"%s"}' \
+            "$V" "$V" "$V" "$V" "$SHA" "$MINOS" "$V" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/appcast.json
           if [ -n "$UPDATE_ED_PRIVATE_KEY" ]; then
             swift scripts/sign-update.swift dist/appcast.json
           else
-            echo "::warning::UPDATE_ED_PRIVATE_KEY not set — release will ship without a signed manifest (in-app updates disabled for this release)"
+            echo "::error::UPDATE_ED_PRIVATE_KEY not set — cannot ship a signed update manifest"
+            exit 1
           fi
 
       - name: Upload workflow artifacts
@@ -94,8 +98,9 @@ jobs:
         with:
           name: SonosBar ${{ steps.ver.outputs.version }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           body: |
             Unsigned build — first launch will require right-click → Open to bypass Gatekeeper.
             macOS 26 (Tahoe) or later.

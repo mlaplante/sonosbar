@@ -66,7 +66,7 @@ cleanup() {
     # before ORIG_VER is captured must not write an empty version).
     if [ -z "${E2E_PREBUILT_APP:-}" ] && [ -n "${ORIG_VER:-}" ]; then
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ORIG_VER" "$ROOT/SonosBar/Resources/Info.plist"
-        /usr/libexec/PlistBuddy -c "Set :SBUpdatePublicKey " "$ROOT/SonosBar/Resources/Info.plist"
+        /usr/libexec/PlistBuddy -c "Set :SBUpdatePublicKey ${ORIG_PUB:-}" "$ROOT/SonosBar/Resources/Info.plist"
     fi
     rm -rf "$WORK"
 }
@@ -106,6 +106,7 @@ if [ -n "${E2E_PREBUILT_APP:-}" ]; then
 else
     echo "==> Building v98 and v99 from the current tree"
     ORIG_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$ROOT/SonosBar/Resources/Info.plist")
+    ORIG_PUB=$(/usr/libexec/PlistBuddy -c "Print :SBUpdatePublicKey" "$ROOT/SonosBar/Resources/Info.plist" 2>/dev/null || echo "")
 fi
 build_version 98.0.0 "$WORK/old"
 build_version 99.0.0 "$WORK/new"
