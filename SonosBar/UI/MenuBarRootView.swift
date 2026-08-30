@@ -1060,13 +1060,18 @@ private struct EQSlider: View {
                 step: 1,
                 onEditingChanged: { editing in
                     if !editing, let p = preview {
+                        // Keep showing the released value; clearing preview
+                        // here would snap the thumb back to the stale
+                        // canonical value until the optimistic write lands.
                         commit(Int(p.rounded()))
-                        preview = nil
                     }
                 }
             )
             .controlSize(.mini)
             .accessibilityLabel(label)
+            // Canonical value settled (optimistic write or rollback): drop
+            // the local preview so the slider tracks the coordinator again.
+            .onChange(of: value) { _, _ in preview = nil }
             Text("\(Int(shown) > 0 ? "+" : "")\(Int(shown))")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)

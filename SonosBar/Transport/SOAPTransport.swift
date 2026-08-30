@@ -191,6 +191,16 @@ struct SOAPTransport: SonosTransport {
         )
     }
 
+    func getGroupMute(of coordinator: DiscoveredPlayer) async throws -> Bool {
+        let response = try await client.send(
+            action: "GetGroupMute",
+            service: .groupRenderingControl,
+            arguments: [("InstanceID", "0")],
+            to: coordinator
+        )
+        return response.descendants(named: "CurrentMute").first?.trimmed == "1"
+    }
+
     // MARK: - EQ (RenderingControl service)
 
     func getEQ(of player: DiscoveredPlayer) async throws -> EQSettings {

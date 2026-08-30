@@ -313,11 +313,16 @@ final class SonosCoordinator {
         if let m = decoded.muted  { memberSnap.muted = m }
         memberVolumes[uuid] = memberSnap
 
-        // Also update the group-level snapshot if this is the coordinator.
+        // Mirror the coordinator's per-speaker event into the group snapshot
+        // ONLY for a solo group, where the two are identical. For a real
+        // multi-speaker group the coordinator's own volume is not the group
+        // volume (that's GroupRenderingControl), so applying it here would
+        // fight the group-volume slider — group volume refreshes via
+        // getGroupVolume instead. Mute stays coordinator-anchored either way.
         if let group = groups.first(where: { $0.coordinatorUUID == uuid }) {
             var snap = volumes[group.id] ?? VolumeSnapshot()
-            if let v = decoded.volume { snap.volume = v }
-            if let m = decoded.muted  { snap.muted = m }
+            if group.visibleMembers.count <= 1, let v = decoded.volume { snap.volume = v }
+            if let m = decoded.muted { snap.muted = m }
             volumes[group.id] = snap
         }
     }
@@ -411,12 +416,10 @@ final class SonosCoordinator {
         guard let group = selectedGroup,
               let coord = coordinator(of: group) else { return }
         async let playbackTask = transport.playbackSnapshot(of: coord)
-        async let volumeTask = transport.getVolume(of: coord)
         async let playModeTask = transport.getPlayMode(of: coord)
         do {
-            let (p, v, pm) = try await (playbackTask, volumeTask, playModeTask)
+            let (p, pm) = try await (playbackTask, playModeTask)
             self.playback[group.id] = p
-            self.volumes[group.id] = v
             self.playModes[group.id] = pm.mode
             self.crossfades[group.id] = pm.crossfade
             self.lastError = nil
@@ -427,12 +430,31 @@ final class SonosCoordinator {
         } catch {
             Log.domain.error("Group state fetch failed")
         }
-        // EQ is fetched best-effort and separately: a device that faults on
-        // GetBass/GetTreble/GetLoudness (some bonded members do) must not
-        // blank the playback/volume refresh above.
-        if let eq = try? await transport.getEQ(of: coord) {
+        // Group volume must be read the same way it's written (group-level),
+        // or a multi-speaker slider snaps back to the coordinator's own
+        // per-speaker volume on the next refresh. Best-effort so a fault
+        // can't blank the refresh above.
+        if let v = await groupVolumeSnapshot(coord) {
+            self.volumes[group.id] = v
+        }
+        // EQ is effectively static; fetch it once per group (our own setters
+        // keep it current) rather than on every refresh, which would add
+        // three SOAP calls after every seek/play/zone-switch to a device
+        // that rate-limits.
+        if eqByGroup[group.id] == nil, let eq = try? await transport.getEQ(of: coord) {
             self.eqByGroup[group.id] = eq
         }
+    }
+
+    /// Group-level volume+mute (matches the group-volume writes), falling
+    /// back to the coordinator's per-speaker RenderingControl volume on
+    /// firmware without GroupRenderingControl.
+    private func groupVolumeSnapshot(_ coord: DiscoveredPlayer) async -> VolumeSnapshot? {
+        if let vol = try? await transport.getGroupVolume(of: coord) {
+            let muted = (try? await transport.getGroupMute(of: coord)) ?? false
+            return VolumeSnapshot(volume: vol, muted: muted)
+        }
+        return try? await transport.getVolume(of: coord)
     }
 
     private func ingestPlayers(_ found: [DiscoveredPlayer]) {

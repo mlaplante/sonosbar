@@ -53,6 +53,7 @@ protocol SonosTransport: Sendable {
     func setGroupVolume(_ volume: Int, on coordinator: DiscoveredPlayer) async throws
     func getGroupVolume(of coordinator: DiscoveredPlayer) async throws -> Int
     func setGroupMute(_ muted: Bool, on coordinator: DiscoveredPlayer) async throws
+    func getGroupMute(of coordinator: DiscoveredPlayer) async throws -> Bool
 
     // MARK: - EQ (RenderingControl service)
 
