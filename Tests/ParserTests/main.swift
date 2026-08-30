@@ -184,6 +184,51 @@ expect(UpdateChecker.version("1.0", isNewerThan: "0.9.9"), "1.0 > 0.9.9")
 expect(!UpdateChecker.version("0.4.0", isNewerThan: "0.4.0"), "equal versions are not newer")
 expect(!UpdateChecker.version("0.4", isNewerThan: "0.4.0"), "0.4 == 0.4.0")
 
+// MARK: - UpdateManifest strict decoding
+
+let goodManifestJSON = """
+{"version":"0.6.0","build":"10",\
+"url":"https://github.com/mlaplante/sonosbar/releases/download/v0.6.0/SonosBar-0.6.0.app.zip",\
+"sha256":"75a0522babf73807f054bfdfac1b65993788d813821814d88fc3abb896ea9c93",\
+"bundleIdentifier":"app.sonosbar.SonosBar","minimumSystemVersion":"26.0",\
+"releaseNotesURL":"https://github.com/mlaplante/sonosbar/releases/tag/v0.6.0",\
+"pubDate":"2026-08-30T12:00:00Z"}
+"""
+do {
+    let m = try UpdateManifest.decode(Data(goodManifestJSON.utf8))
+    expectEqual(m.version, "0.6.0", "manifest version decodes")
+    expectEqual(m.bundleIdentifier, "app.sonosbar.SonosBar", "manifest bundle id decodes")
+    expectEqual(m.url.host, "github.com", "manifest url decodes")
+} catch {
+    expect(false, "good manifest decodes: \(error)")
+}
+
+// Missing field fails closed.
+let missingSha = goodManifestJSON.replacingOccurrences(
+    of: "\"sha256\":\"75a0522babf73807f054bfdfac1b65993788d813821814d88fc3abb896ea9c93\",",
+    with: "")
+expect((try? UpdateManifest.decode(Data(missingSha.utf8))) == nil, "missing sha256 rejected")
+
+// Unknown field fails closed (defense against manifest-format confusion).
+let extraField = goodManifestJSON.replacingOccurrences(
+    of: "\"version\":\"0.6.0\"",
+    with: "\"version\":\"0.6.0\",\"evil\":\"x\"")
+expect((try? UpdateManifest.decode(Data(extraField.utf8))) == nil, "unknown field rejected")
+
+// Wrong type fails closed.
+let wrongType = goodManifestJSON.replacingOccurrences(
+    of: "\"build\":\"10\"", with: "\"build\":10")
+expect((try? UpdateManifest.decode(Data(wrongType.utf8))) == nil, "non-string build rejected")
+
+// Not JSON at all.
+expect((try? UpdateManifest.decode(Data("<html>".utf8))) == nil, "non-JSON rejected")
+
+// Invalid URL string.
+let badURL = goodManifestJSON.replacingOccurrences(
+    of: "https://github.com/mlaplante/sonosbar/releases/download/v0.6.0/SonosBar-0.6.0.app.zip",
+    with: " ")
+expect((try? UpdateManifest.decode(Data(badURL.utf8))) == nil, "unparseable url rejected")
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")
