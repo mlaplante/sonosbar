@@ -47,7 +47,12 @@ let package = Package(
                 // subscriptions, transport state), so we want this on from day 1.
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableUpcomingFeature("ExistentialAny"),
-                .enableExperimentalFeature("AccessLevelOnImport")
+                .enableExperimentalFeature("AccessLevelOnImport"),
+                // SwiftPM does NOT define DEBUG automatically (Xcode does).
+                // Define it here so the updater's E2E-only debug seams
+                // (feed-URL override, unattended auto-install) compile out of
+                // release builds. The E2E harness builds -c debug to reach them.
+                .define("DEBUG", .when(configuration: .debug))
             ],
             linkerSettings: [
                 // MediaPlayer needed for MPNowPlayingInfoCenter (chunk 7).

@@ -44,9 +44,15 @@ final class UpdateChecker {
     /// end-to-end test harness (scripts/test-update-e2e.sh) — a debug
     /// hook, deliberately undocumented in user-facing surfaces.
     var feedURL: URL? {
+        #if DEBUG
+        // E2E harness seam only (compiled out of release builds): redirect
+        // the feed to a localhost server. A release build ignores this key
+        // so a co-installed process can't repoint the update feed by writing
+        // the app's UserDefaults domain.
         if let override = UserDefaults.standard.string(forKey: "debug.updateFeedURL") {
             return URL(string: override)
         }
+        #endif
         return (Bundle.main.infoDictionary?["SBUpdateFeedURL"] as? String)
             .flatMap(URL.init(string:))
     }
@@ -124,12 +130,16 @@ final class UpdateChecker {
         latestVersion = manifest.version
         releaseURL = manifest.releaseNotesURL
 
-        // E2E harness seam (scripts/test-update-e2e.sh): install without a
-        // click. The popover-gated UpdateCard hook can't fire headless.
+        #if DEBUG
+        // E2E harness seam only (compiled out of release builds): install
+        // without a click. The popover-gated UpdateCard hook can't fire
+        // headless. Gated so a release build can never be driven into an
+        // unattended self-install by a written UserDefaults key.
         if UserDefaults.standard.bool(forKey: "debug.updateAutoInstall") {
             let installer = self.installer
             Task { @MainActor in await installer?.install(manifest: manifest) }
         }
+        #endif
         return true
     }
 

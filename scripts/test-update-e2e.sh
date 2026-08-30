@@ -24,7 +24,10 @@
 #     via scripts/build-app.sh, mutating and restoring the repo's
 #     SonosBar/Resources/Info.plist around each build.
 #   * Prebuilt (E2E_PREBUILT_APP=/path/to/SonosBar.app): for CLT-only
-#     machines that cannot run `swift build`. Skips the build entirely —
+#     machines that cannot run `swift build`. The prebuilt app MUST be a
+#     debug build (`build-app.sh debug`): the feed-URL override and
+#     auto-install seams this test relies on are #if DEBUG and are absent
+#     from a release build. Skips the build entirely —
 #     ditto's the prebuilt .app into the version's outdir twice (once
 #     per version) and patches EACH COPY's Info.plist in place with
 #     PlistBuddy, then re-signs the copy ad-hoc (PlistBuddy invalidates
@@ -95,7 +98,10 @@ else
     build_version() { # version outdir
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $1" "$ROOT/SonosBar/Resources/Info.plist"
         /usr/libexec/PlistBuddy -c "Set :SBUpdatePublicKey $PUB" "$ROOT/SonosBar/Resources/Info.plist"
-        (cd "$ROOT" && ./scripts/build-app.sh release >/dev/null)
+        # Debug config on purpose: the feed-URL override and auto-install
+        # seams this test drives are #if DEBUG (compiled out of release
+        # builds). Package.swift defines DEBUG for the debug configuration.
+        (cd "$ROOT" && ./scripts/build-app.sh debug >/dev/null)
         mkdir -p "$2"
         ditto "$ROOT/build/SonosBar.app" "$2/SonosBar.app"
     }

@@ -203,6 +203,12 @@ final class UpdateInstaller {
             helper.executableURL = URL(fileURLWithPath: "/bin/sh")
             helper.arguments = [script.path, "\(getpid())", newApp.path,
                                 bundleURL.path, Self.lastUpdateErrorFile.path]
+            // Run the detached swap helper with an empty environment. The
+            // script pins its own PATH and reads its SB_* seams via
+            // ${VAR:-default}, so an empty env forces the safe production
+            // defaults — a co-installed process can't set SB_OPEN to point
+            // the post-swap relaunch at an arbitrary executable.
+            helper.environment = [:]
             try helper.run()
 
             state = .working("Restarting…")
