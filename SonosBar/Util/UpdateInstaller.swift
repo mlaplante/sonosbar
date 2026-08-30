@@ -8,7 +8,10 @@
 //  (download -> unpack -> gate -> swap -> relaunch) lives on the
 //  @Observable instance the popover binds to.
 //
-//  The point of no return is NSApp.terminate: past it the app cannot
+//  The point of no return is exit(0), after a capped graceful shutdown:
+//  NSApp.terminate cannot be used here (see install()) because its
+//  .terminateLater nested event loop deadlocks against the MainActor
+//  task that must eventually reply to it. Past exit(0) the app cannot
 //  report anything, so everything after is owned by a detached shell
 //  helper that waits for exit, swaps, relaunches — and on ANY failure
 //  brings the original app back and records why (see helperScript).
@@ -16,7 +19,6 @@
 
 import Foundation
 import Observation
-import AppKit
 import CryptoKit
 
 /// Why the in-app install path is declining. Refusal is a normal outcome
@@ -82,6 +84,13 @@ final class UpdateInstaller {
     // MARK: - State the popover binds to
 
     private(set) var state: UpdateInstallState = .idle
+
+    /// Graceful pre-exit cleanup, injected by AppDelegate. install() runs
+    /// this (raced against a 5s cap, mirroring applicationShouldTerminate's
+    /// own watchdog) instead of going through NSApp.terminate — see the
+    /// file header and install() for why NSApp.terminate can't be used
+    /// from here.
+    var prepareForTermination: (@MainActor () async -> Void)?
 
     /// Where the helper records post-terminate failures for the next
     /// launch to surface. The app cannot see these happen live — its UI
@@ -185,8 +194,21 @@ final class UpdateInstaller {
             try helper.run()
 
             state = .working("Restarting…")
-            Log.app.info("Update handoff: helper pid \(helper.processIdentifier), terminating for swap")
-            NSApp.terminate(nil)
+            Log.app.info("Update handoff: helper pid \(helper.processIdentifier); shutting down for swap")
+            // NSApp.terminate is unusable here: from a MainActor task its
+            // .terminateLater nested event loop deadlocks against the very
+            // actor that must send the reply (found via E2E + sample).
+            // Graceful cleanup, then a plain exit — the helper only needs
+            // this PID to die.
+            if let prepareForTermination {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { @MainActor in await prepareForTermination() }
+                    group.addTask { try? await Task.sleep(for: .seconds(5)) }
+                    _ = await group.next()
+                    group.cancelAll()
+                }
+            }
+            exit(0)
         } catch let failure as UpdateInstallFailure {
             state = .failed(failure.explanation)
         } catch {
@@ -259,7 +281,7 @@ enum UpdateInstallFailure: Error {
 ///     never indexed as a second visible app; both live next to DST, so
 ///     every rename is atomic.
 ///   * A failed rename onto DST (step 2 above) MUST bring the original
-///     back AND relaunch it: past NSApp.terminate nobody else can, and
+///     back AND relaunch it: past the app's exit nobody else can, and
 ///     the alternative is a menu bar icon that silently never returns.
 ///     Every earlier failure (missing payload, staging copy, or the
 ///     DST->backup rename itself) leaves DST untouched, so no restore is

@@ -146,9 +146,15 @@ working manual path.
 
 ## Failure handling
 
-**The point of no return is `NSApp.terminate`.** After it, the app cannot report
-anything — the UI is gone. Every failure past that point must be handled by the
-helper script, which is why the helper, not the app, owns recovery:
+**The point of no return is `exit(0)`, after a capped graceful shutdown.**
+`NSApp.terminate` cannot be called from the installer: `install()` runs as a
+MainActor task, and `.terminateLater`'s nested event loop would block that same
+actor waiting for a reply that only other MainActor work can send — a self-deadlock
+confirmed by an end-to-end hang and process sample, fixed by running a capped
+graceful-shutdown closure and calling `exit(0)` directly instead. After `exit(0)`
+the app cannot report anything — the UI is gone. Every failure past that point must
+be handled by the helper script, which is why the helper, not the app, owns
+recovery:
 
 - **Wait-loop timeout (30s):** the app is evidently still alive. Do **not** touch
   the bundle. Exit without changing anything; the running app is unharmed.

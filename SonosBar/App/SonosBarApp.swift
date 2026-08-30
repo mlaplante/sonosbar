@@ -168,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { await coordinator.bootstrap() }
         updates.installer = installer
+        installer.prepareForTermination = { [weak self] in
+            await self?.coordinator.shutdown()
+        }
         updates.start()
         if let failure = installer.consumeLastUpdateError() {
             Log.app.error("Previous update did not complete: \(failure)")
