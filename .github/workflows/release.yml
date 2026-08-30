@@ -30,6 +30,11 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Building version: $V"
 
+      - name: Stamp version into Info.plist
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.ver.outputs.version }}" SonosBar/Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.ver.outputs.version }}" SonosBar/Resources/Info.plist
+
       - name: Select latest Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
@@ -41,6 +46,9 @@ jobs:
       - name: Run parser tests
         run: ./scripts/run-parser-tests.sh
 
+      - name: Run update-helper tests
+        run: ./scripts/test-update-helper.sh
+
       - name: Build .app (release, ad-hoc signed)
         run: ./scripts/build-app.sh release
 
@@ -49,10 +57,28 @@ jobs:
           SONOSBAR_VERSION: ${{ steps.ver.outputs.version }}
         run: ./scripts/make-dmg.sh
 
-      - name: Zip .app as fallback artifact
+      - name: Zip .app (update payload)
         run: |
           cd build
           ditto -c -k --keepParent SonosBar.app "SonosBar-${{ steps.ver.outputs.version }}.app.zip"
+
+      - name: Build signed update manifest
+        if: github.event_name == 'push'
+        env:
+          UPDATE_ED_PRIVATE_KEY: ${{ secrets.UPDATE_ED_PRIVATE_KEY }}
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          SHA=$(shasum -a 256 "build/SonosBar-$V.app.zip" | awk '{print $1}')
+          # Written as one exact byte stream; sign-update.swift signs these
+          # raw bytes and UpdateSignature.swift verifies the same bytes, so
+          # this file must never be reformatted after this point.
+          printf '{"version":"%s","build":"%s","url":"https://github.com/mlaplante/sonosbar/releases/download/v%s/SonosBar-%s.app.zip","sha256":"%s","bundleIdentifier":"app.sonosbar.SonosBar","minimumSystemVersion":"26.0","releaseNotesURL":"https://github.com/mlaplante/sonosbar/releases/tag/v%s","pubDate":"%s"}' \
+            "$V" "$V" "$V" "$V" "$SHA" "$V" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/appcast.json
+          if [ -n "$UPDATE_ED_PRIVATE_KEY" ]; then
+            swift scripts/sign-update.swift dist/appcast.json
+          else
+            echo "::warning::UPDATE_ED_PRIVATE_KEY not set — release will ship without a signed manifest (in-app updates disabled for this release)"
+          fi
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v7
@@ -76,3 +102,5 @@ jobs:
           files: |
             dist/SonosBar-${{ steps.ver.outputs.version }}.dmg
             build/SonosBar-${{ steps.ver.outputs.version }}.app.zip
+            dist/appcast.json
+            dist/appcast.json.sig
