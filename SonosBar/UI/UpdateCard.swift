@@ -72,5 +72,13 @@ struct UpdateCard: View {
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .onAppear {
+            // E2E harness hook (scripts/test-update-e2e.sh): install
+            // without a click. Debug-only; never set by the app.
+            if UserDefaults.standard.bool(forKey: "debug.updateAutoInstall"),
+               case .idle = installer.state {
+                Task { await installer.install(manifest: manifest) }
+            }
+        }
     }
 }
