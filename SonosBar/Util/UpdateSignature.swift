@@ -21,7 +21,7 @@ enum UpdateSignature {
     static func verify(manifestBytes: Data,
                        signatureBase64: String,
                        publicKeyBase64: String) -> Bool {
-        guard let keyData = Data(base64Encoded: publicKeyBase64),
+        guard let keyData = Data(base64Encoded: publicKeyBase64.trimmingCharacters(in: .whitespacesAndNewlines)),
               let sigData = Data(base64Encoded: signatureBase64.trimmingCharacters(in: .whitespacesAndNewlines)),
               let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData)
         else { return false }

@@ -230,6 +230,18 @@ let badURL = goodManifestJSON.replacingOccurrences(
     with: " ")
 expect((try? UpdateManifest.decode(Data(badURL.utf8))) == nil, "unparseable url rejected")
 
+// Scheme rejection: ftp URLs not allowed.
+let ftpURL = goodManifestJSON.replacingOccurrences(
+    of: "https://github.com/mlaplante/sonosbar/releases/download/v0.6.0/SonosBar-0.6.0.app.zip",
+    with: "ftp://evil.example/SonosBar.app.zip")
+expect((try? UpdateManifest.decode(Data(ftpURL.utf8))) == nil, "non-http(s) payload url rejected")
+
+// Scheme rejection: file URLs not allowed in releaseNotesURL.
+let fileNotesURL = goodManifestJSON.replacingOccurrences(
+    of: "https://github.com/mlaplante/sonosbar/releases/tag/v0.6.0",
+    with: "file:///etc/passwd")
+expect((try? UpdateManifest.decode(Data(fileNotesURL.utf8))) == nil, "file: release notes url rejected")
+
 // MARK: - UpdateSignature Ed25519 verification
 
 let sigTestKey = Curve25519.Signing.PrivateKey()
@@ -263,6 +275,10 @@ expect(!UpdateSignature.verify(manifestBytes: manifestBytes,
                                signatureBase64: goodSig,
                                publicKeyBase64: ""),
        "empty public key rejected")
+expect(UpdateSignature.verify(manifestBytes: manifestBytes,
+                              signatureBase64: goodSig,
+                              publicKeyBase64: sigTestPub + "\n"),
+       "public key with trailing newline still verifies")
 
 // MARK: - Summary
 
