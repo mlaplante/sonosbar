@@ -44,7 +44,9 @@ actor Debouncer<Payload: Sendable> {
             let interval = self.interval
             firingTask = Task { [weak self] in
                 try? await Task.sleep(for: interval)
-                guard let self else { return }
+                // cancel() wakes the sleep early; don't fire a cancelled task
+                // (it would steal a payload submitted after the cancel).
+                guard !Task.isCancelled, let self else { return }
                 await self.fire(action: action)
             }
         }

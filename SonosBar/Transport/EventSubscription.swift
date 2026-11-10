@@ -93,7 +93,11 @@ actor EventSubscription {
         let renewIn = max(self.timeout / 2, 15)
         renewTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(renewIn))
-            guard let self else { return }
+            // cancel() wakes the sleep early and `try?` swallows that, so
+            // without this check every unsubscribe() kicked off an instant
+            // renewal that raced the UNSUBSCRIBE — and, failing, created a
+            // brand-new orphan subscription on the speaker during quit.
+            guard !Task.isCancelled, let self else { return }
             await self.renew(callbackHost: callbackHost)
         }
     }

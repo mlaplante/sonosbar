@@ -939,7 +939,7 @@ final class SonosCoordinator {
         sleepTimerPollTasks[groupID] = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
-                guard let self else { return }
+                guard !Task.isCancelled, let self else { return }
                 guard let group = self.groups.first(where: { $0.id == groupID }) else {
                     // The group re-formed or vanished — its ID (and the timer
                     // tracked under it) no longer exists.
