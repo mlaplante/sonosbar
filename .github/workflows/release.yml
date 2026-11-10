@@ -15,7 +15,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Pinned, not macos-latest: the floating label moves between runner
+    # images (and their Xcode/Swift) during rollovers, so the same commit
+    # could ship from different SDKs. Bump deliberately.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 
@@ -35,8 +38,13 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.ver.outputs.version }}" SonosBar/Resources/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.ver.outputs.version }}" SonosBar/Resources/Info.plist
 
-      - name: Select latest Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Select Xcode 26
+        run: |
+          # Newest Xcode 26.x on the image (not the image's floating default).
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XCODE" ] || { echo "::error::no Xcode 26.x found on runner"; ls -d /Applications/Xcode*.app; exit 1; }
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
 
       - name: Show toolchain
         run: |
@@ -49,8 +57,42 @@ jobs:
       - name: Run update-helper tests
         run: ./scripts/test-update-helper.sh
 
-      - name: Build .app (release, ad-hoc signed)
-        run: ./scripts/build-app.sh release
+      - name: Import signing certificate (optional)
+        id: signing
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          SIGNING_IDENTITY_NAME: ${{ secrets.SIGNING_IDENTITY_NAME }}
+        run: |
+          # A stable signing identity keeps the app's designated requirement
+          # constant across releases, so Local Network permission and the
+          # login item survive self-updates. Without the secret we fall back
+          # to ad-hoc (new identity per build).
+          if [ -z "$SIGNING_CERT_P12" ] || [ -z "$SIGNING_IDENTITY_NAME" ]; then
+            echo "::warning::SIGNING_CERT_P12 / SIGNING_IDENTITY_NAME not set — building ad-hoc signed"
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$SIGNING_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+          # Untrusted (self-signed) identities are only found by codesign
+          # when their keychain is in the user search list.
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          echo "identity=$SIGNING_IDENTITY_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build .app (release)
+        env:
+          SONOSBAR_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: |
+          ./scripts/build-app.sh release
+          codesign -d -r- build/SonosBar.app
 
       - name: Package DMG
         env:
@@ -102,8 +144,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
-            Unsigned build — first launch will require right-click → Open to bypass Gatekeeper.
-            macOS 26 (Tahoe) or later.
+            Not notarized — on first launch macOS will block it. Open **System Settings › Privacy & Security**, scroll to Security, and click **Open Anyway** (macOS 15+ removed the old right-click → Open bypass).
+            macOS 26 (Tahoe) or later. Installed copies update themselves from the signed feed.
           files: |
             dist/SonosBar-${{ steps.ver.outputs.version }}.dmg
             build/SonosBar-${{ steps.ver.outputs.version }}.app.zip

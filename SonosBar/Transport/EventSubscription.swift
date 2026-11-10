@@ -46,10 +46,19 @@ actor EventSubscription {
 
     private var renewTask: Task<Void, Never>?
 
-    init(player: DiscoveredPlayer, topic: Topic, callbackPort: UInt16) {
+    /// Called when recovery replaces the SID with a new one (old SID may be
+    /// nil if it was already lost). The coordinator routes NOTIFYs by SID, so
+    /// without this a self-healed subscription delivers events that are
+    /// silently dropped as unknown.
+    typealias SIDChangeHandler = @Sendable (_ old: String?, _ new: String) async -> Void
+    private let onSIDChange: SIDChangeHandler?
+
+    init(player: DiscoveredPlayer, topic: Topic, callbackPort: UInt16,
+         onSIDChange: SIDChangeHandler? = nil) {
         self.player = player
         self.topic = topic
         self.callbackPort = callbackPort
+        self.onSIDChange = onSIDChange
     }
 
     // MARK: - Subscribe / renew / unsubscribe
@@ -90,24 +99,48 @@ actor EventSubscription {
     }
 
     private func renew(callbackHost: String) async {
+        guard let existingSID = sid else {
+            // SID lost — re-subscribe from scratch.
+            await resubscribeWithBackoff(callbackHost: callbackHost, replacing: nil)
+            return
+        }
         do {
-            if let existingSID = sid {
-                let (_, newTimeout) = try await sendSubscribe(callbackHost: callbackHost, renewSID: existingSID)
-                self.timeout = newTimeout
-            } else {
-                // SID lost — re-subscribe from scratch.
-                try await subscribe(callbackHost: callbackHost)
-                return
-            }
+            let (_, newTimeout) = try await sendSubscribe(callbackHost: callbackHost, renewSID: existingSID)
+            self.timeout = newTimeout
             scheduleRenewal(callbackHost: callbackHost)
         } catch {
             Log.events.error("Renewal failed for \(self.topic.service.serviceType) on \(self.player.zoneName): \(String(describing: error)). Re-subscribing.")
-            // Reset SID and try a fresh subscription.
             self.sid = nil
+            await resubscribeWithBackoff(callbackHost: callbackHost, replacing: existingSID)
+        }
+    }
+
+    /// Fresh SUBSCRIBE, retried with backoff until it succeeds or this
+    /// subscription is torn down (unsubscribe() cancels renewTask, which is
+    /// the task this runs on). Never gives up on its own: a speaker that was
+    /// unplugged for an hour should start updating again when it's back.
+    private func resubscribeWithBackoff(callbackHost: String, replacing stale: String?) async {
+        var attempt = 0
+        while !Task.isCancelled {
             do {
-                try await subscribe(callbackHost: callbackHost)
+                let (newSid, newTimeout) = try await sendSubscribe(callbackHost: callbackHost, renewSID: nil)
+                guard !Task.isCancelled else {
+                    // Torn down while the request was in flight — don't leave
+                    // an orphan subscription pointing at us on the speaker.
+                    try? await sendUnsubscribe(sid: newSid)
+                    return
+                }
+                self.sid = newSid
+                self.timeout = newTimeout
+                await onSIDChange?(stale, newSid)
+                Log.events.info("Re-subscribed \(self.topic.service.serviceType) on \(self.player.zoneName) sid=\(newSid)")
+                scheduleRenewal(callbackHost: callbackHost)
+                return
             } catch {
-                Log.events.error("Re-subscribe also failed; giving up until next bootstrap")
+                let delay = ReconnectPolicy.resubscribeDelay(attempt: attempt)
+                Log.events.error("Re-subscribe \(self.topic.service.serviceType) on \(self.player.zoneName) failed (attempt \(attempt + 1)); retrying in \(delay)")
+                try? await Task.sleep(for: delay)
+                attempt += 1
             }
         }
     }
@@ -159,7 +192,7 @@ actor EventSubscription {
         let state = ResumeFlag()
 
         return try await withCheckedThrowingContinuation { cont in
-            @Sendable func resume(_ result: Result<String, Error>) {
+            @Sendable func resume(_ result: Result<String, any Error>) {
                 guard state.tryResume() else { return }
                 conn.cancel()
                 cont.resume(with: result)

@@ -98,30 +98,24 @@ final class NowPlayingBridge {
     // MARK: - Now Playing info
 
     /// Watches coordinator state and pushes updates to MPNowPlayingInfoCenter.
-    /// Observation-driven: publish once (so the OS knows we're the active
-    /// media app), then wait for the next change to anything the publish
-    /// reads and go again. Compared to the old fixed 500ms poll this cuts
-    /// idle wakeups to zero, makes updates land immediately, and stops us
-    /// from re-stealing the media keys twice a second from whatever the
-    /// user deliberately switched to.
+    /// Observation-driven: `Observations` yields once up front (so the OS
+    /// knows we're the active media app), then once per transaction that
+    /// touches anything the closure reads. Compared to the old fixed 500ms
+    /// poll this cuts idle wakeups to zero, makes updates land immediately,
+    /// and stops us from re-stealing the media keys twice a second from
+    /// whatever the user deliberately switched to.
     private func startObserving(_ coordinator: SonosCoordinator) {
         observationTask?.cancel()
+        let changes = Observations { [weak coordinator] in
+            // Touch every property publishNowPlaying reads.
+            _ = coordinator?.selectedGroupID
+            _ = coordinator?.groups
+            _ = coordinator?.playback
+        }
         observationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                guard let self, let coordinator = self.coordinator else { return }
-                self.publishNowPlaying()
-
-                // Track every property publishNowPlaying reads; onChange
-                // fires at most once, then the loop re-publishes and re-arms.
-                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                    withObservationTracking {
-                        _ = coordinator.selectedGroupID
-                        _ = coordinator.groups
-                        _ = coordinator.playback
-                    } onChange: {
-                        cont.resume()
-                    }
-                }
+            for await _ in changes {
+                guard !Task.isCancelled else { return }
+                self?.publishNowPlaying()
             }
         }
     }

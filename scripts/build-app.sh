@@ -63,11 +63,26 @@ fi
 # PkgInfo — a 1990s holdover macOS still expects for proper app bundles.
 printf "APPL????" > "$CONTENTS/PkgInfo"
 
-# Ad-hoc sign so the app can launch locally. Real signing in chunk 11.
-echo "==> Ad-hoc signing for local development"
-codesign --force --deep --sign - \
-    --entitlements "$ROOT/SonosBar/Resources/SonosBar.entitlements" \
-    "$APP_DIR"
+# Signing. SONOSBAR_SIGN_IDENTITY selects a stable identity (Developer ID
+# or a self-signed code-signing cert, by name or SHA-1) so every build has
+# the same designated requirement — TCC grants such as Local Network and the
+# SMAppService login item then survive self-updates. Unset = ad-hoc, which
+# is fine for local development but gives each build a new identity.
+IDENTITY="${SONOSBAR_SIGN_IDENTITY:--}"
+if [ "$IDENTITY" = "-" ]; then
+    echo "==> Ad-hoc signing (set SONOSBAR_SIGN_IDENTITY for a stable identity)"
+    codesign --force --deep --sign - \
+        --entitlements "$ROOT/SonosBar/Resources/SonosBar.entitlements" \
+        "$APP_DIR"
+else
+    echo "==> Signing with identity: $IDENTITY"
+    codesign --force --deep --sign "$IDENTITY" \
+        --options runtime \
+        --identifier app.sonosbar.SonosBar \
+        --entitlements "$ROOT/SonosBar/Resources/SonosBar.entitlements" \
+        "$APP_DIR"
+    codesign --verify --deep --strict "$APP_DIR"
+fi
 
 echo "==> Done: $APP_DIR"
 echo "    Run with: open '$APP_DIR'"

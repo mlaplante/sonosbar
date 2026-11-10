@@ -444,6 +444,36 @@ do {
     expectEqual(ZoneGroup.resolveSelection(previousID: "x", in: []), nil, "empty topology yields nil")
 }
 
+// MARK: - ReconnectPolicy: wake / network-change recovery
+
+do {
+    let delays = (0..<8).map { ReconnectPolicy.resubscribeDelay(attempt: $0) }
+    expectEqual(delays, [.seconds(5), .seconds(10), .seconds(20), .seconds(40),
+                         .seconds(60), .seconds(60), .seconds(60), .seconds(60)],
+                "re-subscribe backoff doubles then caps at 60s and never stops")
+    expectEqual(ReconnectPolicy.resubscribeDelay(attempt: -3), .seconds(5), "negative attempt clamps")
+    expectEqual(ReconnectPolicy.resubscribeDelay(attempt: 10_000), .seconds(60), "huge attempt doesn't overflow")
+
+    func needs(force: Bool = false, was: String? = "10.0.0.5", now: String? = "10.0.0.5",
+               live: Bool = true) -> Bool {
+        ReconnectPolicy.needsResubscribe(force: force, previousCallbackHost: was,
+                                         currentCallbackHost: now, hasLiveSubscriptions: live)
+    }
+    expect(!needs(), "same address + live subscriptions: leave them alone")
+    expect(needs(now: "192.168.1.20"), "callback address moved (Wi-Fi switch): resubscribe")
+    expect(needs(force: true), "wake / re-scan forces a resubscribe")
+    expect(needs(live: false), "no subscriptions (launched offline): subscribe")
+    expect(needs(was: nil, now: "10.0.0.5", live: false), "first subscribe after bootstrap failed")
+    expect(!needs(force: true, now: nil), "can't resolve our address: don't tear down what we have")
+    expect(!needs(now: nil, live: false), "no address and nothing live: nothing to do yet")
+
+    expect(ConnectivityMonitor.Trigger.networkChange.merged(with: .wake) == .wake,
+           "a pending wake survives a later path change")
+    expect(ConnectivityMonitor.Trigger.wake.merged(with: nil) == .wake, "wake alone stays wake")
+    expect(ConnectivityMonitor.Trigger.networkChange.merged(with: nil) == .networkChange,
+           "path change alone stays a path change")
+}
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")

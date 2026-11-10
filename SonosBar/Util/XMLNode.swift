@@ -80,7 +80,7 @@ final class XMLNode: @unchecked Sendable {
     // MARK: - Parsing
 
     enum ParseError: Error {
-        case invalidXML(underlying: Error?)
+        case invalidXML(underlying: (any Error)?)
         case emptyDocument
     }
 

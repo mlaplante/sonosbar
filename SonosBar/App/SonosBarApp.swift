@@ -162,6 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let hotkeys = GlobalHotkeyManager()
     let updates = UpdateChecker()
     let installer = UpdateInstaller()
+    let connectivity = ConnectivityMonitor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         nowPlaying.attach(to: coordinator)
@@ -181,6 +182,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { await coordinator.bootstrap() }
+
+        // A menu bar app lives across lid closes and Wi-Fi changes; without
+        // this, subscriptions lapse or point at a dead callback address and
+        // the popover silently stops updating until relaunch.
+        connectivity.start { trigger in
+            Task { await coordinator.reconnect(force: trigger == .wake) }
+        }
         updates.installer = installer
         installer.prepareForTermination = { [weak self] in
             await self?.coordinator.shutdown()
@@ -204,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         nowPlaying.detach()
         hotkeys.uninstall()
+        connectivity.stop()
 
         // Blocking the main thread here (DispatchGroup.wait) can never work:
         // shutdown() is main-actor and would need the very thread we'd be

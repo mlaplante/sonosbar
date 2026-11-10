@@ -26,6 +26,7 @@
 //
 
 import SwiftUI
+import Combine  // Timer.publish(...).autoconnect() in the scrubber
 
 private enum Tab: Hashable {
     case nowPlaying

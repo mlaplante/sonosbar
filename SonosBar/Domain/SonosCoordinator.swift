@@ -87,6 +87,21 @@ final class SonosCoordinator {
     /// without duplicating subscriptions on already-covered speakers.
     private var subscribedPlayerUUIDs: Set<String> = []
     private var subscribedTopology = false
+    /// The address we handed speakers in CALLBACK. If our LAN address
+    /// moves, speakers keep posting NOTIFYs here, so a mismatch means
+    /// every subscription must be re-created.
+    private var callbackHost: String?
+
+    // MARK: - Reconnect gating
+    /// Bootstrap and reconnects share one gate so wake/network triggers that
+    /// land mid-flight are queued (not dropped, not run concurrently).
+    private var reconnectInFlight = false
+    /// Force flag of a reconnect queued behind the one in flight; nil = none.
+    private var queuedReconnect: Bool?
+    /// A forced reconnect (wake) that couldn't resubscribe because the
+    /// network wasn't usable yet. Carried into the next attempt so a
+    /// following path change still does the full resubscribe.
+    private var owedForcedResubscribe = false
 
     private let volumeDebouncer = Debouncer<Int>(interval: .milliseconds(120))
     private var memberVolumeDebouncers: [String: Debouncer<Int>] = [:]
@@ -105,6 +120,13 @@ final class SonosCoordinator {
     // MARK: - Lifecycle
 
     func bootstrap() async {
+        reconnectInFlight = true
+        await performBootstrap()
+        reconnectInFlight = false
+        await drainQueuedReconnect()
+    }
+
+    private func performBootstrap() async {
         // Kick off SSDP and last-known-host preflight concurrently —
         // whichever returns first wins for "what speakers are out there?".
         async let ssdpTask = discovery.search()
@@ -130,7 +152,7 @@ final class SonosCoordinator {
         }
 
         do {
-            try await startEventServer()
+            try await ensureEventServer()
             await subscribeAll()
         } catch {
             Log.domain.error("Event subscription bootstrap failed: \(String(describing: error))")
@@ -141,26 +163,106 @@ final class SonosCoordinator {
         isInitialising = false
     }
 
+    /// User-initiated Re-scan: rediscover and rebuild every subscription.
     func refresh() async {
-        let found = await discovery.search()
-        ingestPlayers(found)
-        await refreshTopology()
-        // Cover any speakers that appeared since bootstrap — without this,
-        // a speaker added mid-session never gets event subscriptions and
-        // its volume/playback state silently stops updating.
-        await subscribeAll()
-        await refreshSelectedGroup()
+        await reconnect(force: true)
     }
 
     func shutdown() async {
         for task in sleepTimerPollTasks.values { task.cancel() }
         sleepTimerPollTasks.removeAll()
-        for sub in subscriptions { await sub.unsubscribe() }
+        await tearDownSubscriptions()
+        await eventServer.stop()
+    }
+
+    // MARK: - Reconnect (wake / network change / re-scan)
+
+    /// Brings discovery, topology, and event subscriptions back in line with
+    /// the current network. `force` re-creates every subscription (after
+    /// wake they may have lapsed); otherwise they're only rebuilt when our
+    /// callback address moved or none exist. Cheap when nothing changed.
+    func reconnect(force: Bool) async {
+        if reconnectInFlight {
+            queuedReconnect = (queuedReconnect ?? false) || force
+            return
+        }
+        reconnectInFlight = true
+        await performReconnect(force: force)
+        reconnectInFlight = false
+        await drainQueuedReconnect()
+    }
+
+    private func drainQueuedReconnect() async {
+        while let force = queuedReconnect, !reconnectInFlight {
+            queuedReconnect = nil
+            reconnectInFlight = true
+            await performReconnect(force: force)
+            reconnectInFlight = false
+        }
+    }
+
+    private func performReconnect(force requested: Bool) async {
+        let force = requested || owedForcedResubscribe
+        Log.domain.info("Reconnecting (force: \(force))")
+
+        // Rediscover: speakers may have new DHCP leases on a new network,
+        // or this is the first time we've had a network at all.
+        ingestPlayers(await discovery.search())
+        guard let probe = players.values.first else {
+            owedForcedResubscribe = force
+            return
+        }
+
+        let currentHost = await LocalAddress.preferred(for: probe.host)
+        let rebuild = ReconnectPolicy.needsResubscribe(
+            force: force,
+            previousCallbackHost: callbackHost,
+            currentCallbackHost: currentHost,
+            hasLiveSubscriptions: !subscriptions.isEmpty
+        )
+        // Couldn't resolve our address — the network isn't really usable
+        // yet. Keep any owed force for the next trigger.
+        owedForcedResubscribe = force && currentHost == nil
+
+        if rebuild {
+            if let previous = callbackHost, let currentHost, previous != currentHost {
+                Log.domain.info("Callback address moved \(previous) → \(currentHost); resubscribing")
+            }
+            await tearDownSubscriptions()
+            do {
+                try await ensureEventServer()
+            } catch {
+                Log.domain.error("Event server restart failed: \(String(describing: error))")
+            }
+        }
+
+        await refreshTopology()
+        // Also covers speakers that appeared since the last pass, without
+        // duplicating subscriptions on already-covered ones.
+        await subscribeAll()
+        await refreshSelectedGroup()
+        if favorites.isEmpty { await loadFavorites() }
+    }
+
+    /// Unsubscribes everything in parallel (each UNSUBSCRIBE can take up to
+    /// its 5s timeout against an unreachable speaker) and forgets all
+    /// routing state so subscribeAll() starts clean.
+    private func tearDownSubscriptions() async {
+        let subs = subscriptions
         subscriptions.removeAll()
         subscriptionIndex.removeAll()
         subscribedPlayerUUIDs.removeAll()
         subscribedTopology = false
-        await eventServer.stop()
+        callbackHost = nil
+        await withTaskGroup(of: Void.self) { group in
+            for sub in subs { group.addTask { await sub.unsubscribe() } }
+        }
+    }
+
+    private func rekeySubscription(old: String?, new: String,
+                                   uuid: String, topic: EventSubscription.Topic) {
+        if let old { subscriptionIndex.removeValue(forKey: old) }
+        subscriptionIndex[new] = (uuid, topic)
     }
 
     /// Tries cached IPs in parallel; returns only those that respond.
@@ -231,9 +333,20 @@ final class SonosCoordinator {
 
     // MARK: - Event server + subscriptions
 
-    private func startEventServer() async throws {
+    private func ensureEventServer() async throws {
+        guard await !eventServer.isListening else { return }
         _ = try await eventServer.start(handler: { [weak self] event in
             await self?.handleEvent(event)
+        })
+    }
+
+    private func makeSubscription(player: DiscoveredPlayer,
+                                  topic: EventSubscription.Topic,
+                                  callbackPort: UInt16) -> EventSubscription {
+        let uuid = player.uuid
+        return EventSubscription(player: player, topic: topic, callbackPort: callbackPort,
+                                 onSIDChange: { [weak self] old, new in
+            await self?.rekeySubscription(old: old, new: new, uuid: uuid, topic: topic)
         })
     }
 
@@ -244,12 +357,18 @@ final class SonosCoordinator {
         guard let firstPlayer = players.values.first,
               let callbackHost = await LocalAddress.preferred(for: firstPlayer.host) else { return }
 
+        if let existing = self.callbackHost, existing != callbackHost {
+            // Address moved but nobody tore down yet (reconnect decides that);
+            // don't mix two callback addresses across speakers.
+            return
+        }
+        self.callbackHost = callbackHost
         Log.events.info("Subscribing using callback http://\(callbackHost):\(callbackPort)/")
 
         for player in players.values where !subscribedPlayerUUIDs.contains(player.uuid) {
             var covered = true
             for topic in [EventSubscription.Topic.avTransport, .renderingControl] {
-                let sub = EventSubscription(player: player, topic: topic, callbackPort: callbackPort)
+                let sub = makeSubscription(player: player, topic: topic, callbackPort: callbackPort)
                 do {
                     try await sub.subscribe(callbackHost: callbackHost)
                     if let sid = await sub.sid {
@@ -265,7 +384,7 @@ final class SonosCoordinator {
             }
             if covered { subscribedPlayerUUIDs.insert(player.uuid) }
             if !subscribedTopology {
-                let sub = EventSubscription(player: player, topic: .zoneGroupTopology, callbackPort: callbackPort)
+                let sub = makeSubscription(player: player, topic: .zoneGroupTopology, callbackPort: callbackPort)
                 do {
                     try await sub.subscribe(callbackHost: callbackHost)
                     if let sid = await sub.sid {

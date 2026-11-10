@@ -55,9 +55,23 @@ Open `Package.swift` in Xcode and run, **or** from the command line:
 open build/SonosBar.app                 # launch
 ```
 
-The first launch will be ad-hoc signed only; Gatekeeper will require a
-right-click → Open the first time. For real release distribution, use
-the signing + DMG pipeline:
+A local build is ad-hoc signed, so each rebuild is a new code identity
+(macOS may re-ask for Local Network access). To sign with a stable identity
+— a Developer ID or a self-signed code-signing certificate in your
+keychain — pass its name:
+
+```bash
+SONOSBAR_SIGN_IDENTITY="SonosBar Release Signing" ./scripts/build-app.sh release
+```
+
+Release CI does the same when the `SIGNING_CERT_P12` (base64 .p12),
+`SIGNING_CERT_PASSWORD`, and `SIGNING_IDENTITY_NAME` secrets are set, so
+permissions and the login item survive self-updates.
+
+A downloaded build that isn't notarized is blocked on first launch. On
+macOS 15 and later, right-click → Open no longer bypasses that: open
+**System Settings › Privacy & Security** and click **Open Anyway**. For
+notarized distribution, use the signing + DMG pipeline:
 
 ```bash
 ./scripts/sign-and-notarize.sh "Developer ID Application: Your Name (TEAMID)"

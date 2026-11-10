@@ -70,7 +70,7 @@ actor EventServer {
 
         let state = ResumeFlag()
         let port: UInt16 = try await withCheckedThrowingContinuation { cont in
-            listener.stateUpdateHandler = { listenerState in
+            listener.stateUpdateHandler = { [weak self] listenerState in
                 switch listenerState {
                 case .ready:
                     guard state.tryResume() else { return }
@@ -80,7 +80,13 @@ actor EventServer {
                         cont.resume(throwing: SonosError.unreachable(underlying: "no port assigned"))
                     }
                 case .failed(let err):
-                    guard state.tryResume() else { return }
+                    guard state.tryResume() else {
+                        // Died after it was already serving (e.g. interface
+                        // torn down across sleep). Report it so the next
+                        // reconnect sees port == 0 and restarts the server.
+                        Task { await self?.listenerDied(listener, error: err) }
+                        return
+                    }
                     cont.resume(throwing: err)
                 default:
                     break
@@ -98,9 +104,18 @@ actor EventServer {
         return port
     }
 
+    var isListening: Bool { listener != nil && port > 0 }
+
+    private func listenerDied(_ dead: NWListener, error: NWError) {
+        guard dead === listener else { return }
+        Log.events.error("Event server listener failed: \(String(describing: error))")
+        stop()
+    }
+
     func stop() {
         listener?.cancel()
         listener = nil
+        port = 0
         for c in connections { c.conn.cancel() }
         connections.removeAll()
         Log.events.info("Event server stopped")
