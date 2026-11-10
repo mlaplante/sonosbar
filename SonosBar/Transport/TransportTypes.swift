@@ -146,4 +146,40 @@ struct ZoneGroup: Sendable, Equatable, Hashable {
         let others = visibleMembers.count(where: { $0.uuid != coordinatorUUID })
         return others > 0 ? "\(coord.zoneName) + \(others)" : coord.zoneName
     }
+
+    /// Re-resolves a selected group ID against fresh topology.
+    ///
+    /// Group IDs are `<coordinatorUUID>:<generation>`, and Sonos bumps the
+    /// generation every time a group re-forms (a speaker joins/leaves, a
+    /// stereo pair re-bonds). Falling back to `groups.first` whenever the
+    /// exact ID vanished silently retargeted the controls at an unrelated
+    /// zone, e.g. a TV soundbar that rejects Pause/Next with UPnP 701.
+    /// Instead, follow the same speakers into whatever group they're in now.
+    static func resolveSelection(
+        previousID: String?,
+        previousGroup: ZoneGroup? = nil,
+        in groups: [ZoneGroup]
+    ) -> String? {
+        guard let previousID else { return groups.first?.id }
+        if groups.contains(where: { $0.id == previousID }) { return previousID }
+
+        let prevCoordinator = previousGroup?.coordinatorUUID
+            ?? previousID.split(separator: ":", maxSplits: 1).first.map(String.init)
+            ?? previousID
+
+        // Same coordinator, new generation.
+        if let g = groups.first(where: { $0.coordinatorUUID == prevCoordinator }) { return g.id }
+        // The old coordinator joined another group.
+        if let g = groups.first(where: { $0.members.contains { $0.uuid == prevCoordinator } }) {
+            return g.id
+        }
+        // Coordinator gone (asleep/removed): follow any other former member.
+        if let prev = previousGroup {
+            let prevMembers = Set(prev.members.map(\.uuid))
+            if let g = groups.first(where: { $0.members.contains { prevMembers.contains($0.uuid) } }) {
+                return g.id
+            }
+        }
+        return groups.first?.id
+    }
 }

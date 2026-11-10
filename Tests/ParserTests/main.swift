@@ -405,6 +405,45 @@ for bad in ["8.8.8.8", "172.32.0.1", "172.15.0.1", "1.2.3.4", "example.com", "",
     expect(!SSDPDiscovery.isPrivateOrLinkLocalIPv4(bad), "private range rejects \(bad)")
 }
 
+// MARK: - ZoneGroup.resolveSelection: follow speakers across regroups
+
+do {
+    func m(_ uuid: String, _ name: String, coord: Bool = false) -> ZoneGroupMember {
+        ZoneGroupMember(uuid: uuid, zoneName: name, host: "", isCoordinator: coord, isInvisible: false)
+    }
+    let bedroom = ZoneGroup(id: "RINCON_BED:4095640494", coordinatorUUID: "RINCON_BED",
+                            members: [m("RINCON_BED", "Main Bedroom", coord: true)])
+    let officeOld = ZoneGroup(id: "RINCON_OFF:100", coordinatorUUID: "RINCON_OFF",
+                              members: [m("RINCON_OFF", "Office", coord: true)])
+    let officeNew = ZoneGroup(id: "RINCON_OFF:4200848644", coordinatorUUID: "RINCON_OFF",
+                              members: [m("RINCON_OFF", "Office", coord: true), m("RINCON_O2", "Office 2")])
+    // Bedroom listed FIRST — the old `groups.first` fallback picked it.
+    let now = [bedroom, officeNew]
+
+    expectEqual(ZoneGroup.resolveSelection(previousID: officeOld.id, in: now), officeNew.id,
+                "regroup with new generation keeps the same coordinator's group")
+    expectEqual(ZoneGroup.resolveSelection(previousID: officeOld.id, previousGroup: officeOld, in: now),
+                officeNew.id, "regroup resolves with previousGroup too")
+    expectEqual(ZoneGroup.resolveSelection(previousID: bedroom.id, in: now), bedroom.id,
+                "exact ID match is kept")
+
+    // Office joined the Bedroom group: follow it there.
+    let merged = ZoneGroup(id: "RINCON_BED:5", coordinatorUUID: "RINCON_BED",
+                           members: [m("RINCON_BED", "Main Bedroom", coord: true), m("RINCON_OFF", "Office")])
+    expectEqual(ZoneGroup.resolveSelection(previousID: officeNew.id, in: [merged]), merged.id,
+                "coordinator that joined another group is followed")
+
+    // Coordinator vanished; Office 2 now coordinates on its own.
+    let o2 = ZoneGroup(id: "RINCON_O2:9", coordinatorUUID: "RINCON_O2", members: [m("RINCON_O2", "Office 2", coord: true)])
+    expectEqual(ZoneGroup.resolveSelection(previousID: officeNew.id, previousGroup: officeNew, in: [bedroom, o2]),
+                o2.id, "falls back to a group holding a former member")
+
+    expectEqual(ZoneGroup.resolveSelection(previousID: nil, in: now), bedroom.id, "nil selection picks first")
+    expectEqual(ZoneGroup.resolveSelection(previousID: "RINCON_GONE:1", in: now), bedroom.id,
+                "unknown speakers fall back to first")
+    expectEqual(ZoneGroup.resolveSelection(previousID: "x", in: []), nil, "empty topology yields nil")
+}
+
 // MARK: - Summary
 
 print("\(passes) passed, \(failures) failed")

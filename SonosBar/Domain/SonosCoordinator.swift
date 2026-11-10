@@ -370,9 +370,11 @@ final class SonosCoordinator {
               let xml = decoded.zoneGroupStateXML,
               let root = try? XMLNode.parse(xml) else { return }
         let newGroups = SOAPTransport.parseZoneGroups(from: root)
+        let previousGroup = selectedGroup
         self.groups = newGroups
         if let sel = selectedGroupID, !newGroups.contains(where: { $0.id == sel }) {
-            self.selectedGroupID = newGroups.first?.id
+            self.selectedGroupID = ZoneGroup.resolveSelection(
+                previousID: sel, previousGroup: previousGroup, in: newGroups)
         }
         await adoptNewMembers(from: newGroups)
     }
@@ -401,9 +403,11 @@ final class SonosCoordinator {
     private func refreshTopology() async {
         guard let probe = players.values.first else { return }
         do {
+            let previousGroup = selectedGroup
             self.groups = try await transport.getZoneGroups(via: probe)
             if let sel = selectedGroupID, !groups.contains(where: { $0.id == sel }) {
-                self.selectedGroupID = groups.first?.id
+                self.selectedGroupID = ZoneGroup.resolveSelection(
+                    previousID: sel, previousGroup: previousGroup, in: groups)
             } else if selectedGroupID == nil {
                 self.selectedGroupID = restoreOrPickGroup(groups)
             }
@@ -482,12 +486,11 @@ final class SonosCoordinator {
     }
 
     private func restoreOrPickGroup(_ groups: [ZoneGroup]) -> String? {
-        if settings.rememberLastZone,
-           let last = settings.lastSelectedGroupID,
-           groups.contains(where: { $0.id == last }) {
-            return last
-        }
-        return groups.first?.id
+        // A saved ID from a previous launch almost always has a stale
+        // generation suffix; resolve it by coordinator rather than
+        // dropping to the first group.
+        let last = settings.rememberLastZone ? settings.lastSelectedGroupID : nil
+        return ZoneGroup.resolveSelection(previousID: last, in: groups)
     }
 
     func select(group: ZoneGroup) {
