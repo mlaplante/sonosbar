@@ -442,6 +442,45 @@ do {
     expectEqual(ZoneGroup.resolveSelection(previousID: "RINCON_GONE:1", in: now), bedroom.id,
                 "unknown speakers fall back to first")
     expectEqual(ZoneGroup.resolveSelection(previousID: "x", in: []), nil, "empty topology yields nil")
+
+    // MARK: effectiveSelection: the user's pick survives fallbacks
+    let pref = ZonePreference(group: officeNew)
+    expectEqual(pref.coordinatorUUID, "RINCON_OFF", "preference keeps the coordinator")
+    expectEqual(pref.memberUUIDs, ["RINCON_OFF", "RINCON_O2"], "preference keeps the members")
+
+    // Office is absent (speakers rebooting): fall back, but only for now.
+    expectEqual(ZoneGroup.effectiveSelection(preferred: pref, currentID: officeNew.id,
+                                             previousGroup: officeNew, in: [bedroom]),
+                bedroom.id, "absent preferred zone falls back to what exists")
+    // Office comes back while the fallback (Bedroom) is still a valid group:
+    // the old code only re-resolved when the current ID vanished, so it stuck.
+    expectEqual(ZoneGroup.effectiveSelection(preferred: pref, currentID: bedroom.id,
+                                             previousGroup: bedroom, in: now),
+                officeNew.id, "selection returns to the preferred zone when it reappears")
+    // Launch with a stale generation and a swapped coordinator inside Office.
+    let officeSwapped = ZoneGroup(id: "RINCON_O2:77", coordinatorUUID: "RINCON_O2",
+                                  members: [m("RINCON_O2", "Office 2", coord: true), m("RINCON_OFF", "Office")])
+    expectEqual(ZoneGroup.effectiveSelection(preferred: pref, currentID: nil, previousGroup: nil,
+                                             in: [bedroom, officeSwapped]),
+                officeSwapped.id, "restore follows the coordinator into a swapped group")
+    let pref2 = ZonePreference(coordinatorUUID: "RINCON_GONE", memberUUIDs: ["RINCON_O2"])
+    expectEqual(ZoneGroup.effectiveSelection(preferred: pref2, currentID: nil, previousGroup: nil,
+                                             in: [bedroom, o2]),
+                o2.id, "restore matches by members when the coordinator is gone")
+    // A legacy saved ID (no members) still resolves by its coordinator prefix.
+    let legacy = ZonePreference(savedGroupID: "RINCON_OFF:100", memberUUIDs: [])
+    expectEqual(legacy?.coordinatorUUID, "RINCON_OFF", "legacy group ID yields its coordinator")
+    expectEqual(ZoneGroup.effectiveSelection(preferred: legacy, currentID: nil, previousGroup: nil, in: now),
+                officeNew.id, "legacy saved ID restores by coordinator")
+    expect(ZonePreference(savedGroupID: nil, memberUUIDs: []) == nil, "no saved ID: no preference")
+    // No preference: keep current selection while it exists, else old fallback.
+    expectEqual(ZoneGroup.effectiveSelection(preferred: nil, currentID: officeNew.id,
+                                             previousGroup: officeNew, in: now),
+                officeNew.id, "no preference keeps a valid current selection")
+    expectEqual(ZoneGroup.effectiveSelection(preferred: nil, currentID: nil, previousGroup: nil, in: now),
+                bedroom.id, "no preference and no selection picks first")
+    expectEqual(ZoneGroup.effectiveSelection(preferred: pref, currentID: nil, previousGroup: nil, in: []),
+                nil, "empty topology yields nil")
 }
 
 // MARK: - ReconnectPolicy: wake / network-change recovery

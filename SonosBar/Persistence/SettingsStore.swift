@@ -74,6 +74,14 @@ final class SettingsStore {
         }
     }
 
+    /// Member UUIDs of the zone the user last picked, so a restore can
+    /// still find it after the coordinator role moves within the group.
+    var lastSelectedZoneMembers: [String] {
+        didSet {
+            Self.defaults.set(lastSelectedZoneMembers, forKey: Key.lastSelectedZoneMembers)
+        }
+    }
+
     /// Cache of speaker UUID → host IP. Used by discovery as a fallback
     /// when SSDP fails (e.g. flaky multicast on a busy WiFi network).
     /// We can directly poll these IPs to confirm they're still valid
@@ -119,6 +127,7 @@ final class SettingsStore {
         self.rememberLastZone    = (Self.defaults.object(forKey: Key.rememberLastZone) as? Bool) ?? true
         self.autoCheckForUpdates = (Self.defaults.object(forKey: Key.autoCheckForUpdates) as? Bool) ?? true
         self.lastSelectedGroupID = Self.defaults.string(forKey: Key.lastSelectedGroupID)
+        self.lastSelectedZoneMembers = (Self.defaults.array(forKey: Key.lastSelectedZoneMembers) as? [String]) ?? []
         self.lastKnownHosts      = (Self.defaults.dictionary(forKey: Key.lastKnownHosts) as? [String: String]) ?? [:]
         let pinnedArray = (Self.defaults.array(forKey: Key.pinnedFavoriteURIs) as? [String]) ?? []
         self.pinnedFavoriteURIs  = Set(pinnedArray)
@@ -130,6 +139,7 @@ final class SettingsStore {
         static let rememberLastZone    = "settings.rememberLastZone"
         static let autoCheckForUpdates = "settings.autoCheckForUpdates"
         static let lastSelectedGroupID = "cache.lastSelectedGroupID"
+        static let lastSelectedZoneMembers = "cache.lastSelectedZoneMembers"
         static let lastKnownHosts      = "cache.lastKnownHosts"
         static let pinnedFavoriteURIs  = "settings.pinnedFavoriteURIs"
     }

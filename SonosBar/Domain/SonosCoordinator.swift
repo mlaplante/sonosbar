@@ -11,7 +11,7 @@
 //    * On bootstrap, restore last-selected group ID if `rememberLastZone`.
 //    * Record each discovered player's host IP, so on next launch we
 //      can preflight cached IPs in parallel with SSDP for faster bootstrap.
-//    * Save lastSelectedGroupID whenever the user changes selection.
+//    * Save lastSelectedGroupID (+ members) only when the user picks a zone.
 //
 
 import Foundation
@@ -25,13 +25,13 @@ final class SonosCoordinator {
 
     private(set) var players: [String: DiscoveredPlayer] = [:]
     private(set) var groups: [ZoneGroup] = []
-    var selectedGroupID: String? {
-        didSet {
-            if settings.rememberLastZone {
-                settings.lastSelectedGroupID = selectedGroupID
-            }
-        }
-    }
+    /// The group the controls target. Topology changes may move this to a
+    /// fallback; only `select(group:)` changes (and persists) the user's
+    /// preference, so a fallback never becomes the remembered zone.
+    private(set) var selectedGroupID: String?
+    /// The zone the user explicitly picked; re-applied on every topology
+    /// change so the selection returns to it once its speakers reappear.
+    private var preferredZone: ZonePreference?
 
     private(set) var volumes: [String: VolumeSnapshot] = [:]
     private(set) var playback: [String: PlaybackSnapshot] = [:]
@@ -115,6 +115,11 @@ final class SonosCoordinator {
         self.discovery = discovery
         self.transport = transport
         self.settings = settings
+        if settings.rememberLastZone {
+            self.preferredZone = ZonePreference(
+                savedGroupID: settings.lastSelectedGroupID,
+                memberUUIDs: Set(settings.lastSelectedZoneMembers))
+        }
     }
 
     // MARK: - Lifecycle
@@ -145,8 +150,7 @@ final class SonosCoordinator {
 
         do {
             let g = try await transport.getZoneGroups(via: probe)
-            self.groups = g
-            self.selectedGroupID = restoreOrPickGroup(g)
+            applyTopology(g, previousGroup: nil)
         } catch {
             Log.domain.error("Initial topology fetch failed: \(String(describing: error))")
         }
@@ -489,12 +493,7 @@ final class SonosCoordinator {
               let xml = decoded.zoneGroupStateXML,
               let root = try? XMLNode.parse(xml) else { return }
         let newGroups = SOAPTransport.parseZoneGroups(from: root)
-        let previousGroup = selectedGroup
-        self.groups = newGroups
-        if let sel = selectedGroupID, !newGroups.contains(where: { $0.id == sel }) {
-            self.selectedGroupID = ZoneGroup.resolveSelection(
-                previousID: sel, previousGroup: previousGroup, in: newGroups)
-        }
+        applyTopology(newGroups, previousGroup: selectedGroup)
         await adoptNewMembers(from: newGroups)
     }
 
@@ -523,13 +522,8 @@ final class SonosCoordinator {
         guard let probe = players.values.first else { return }
         do {
             let previousGroup = selectedGroup
-            self.groups = try await transport.getZoneGroups(via: probe)
-            if let sel = selectedGroupID, !groups.contains(where: { $0.id == sel }) {
-                self.selectedGroupID = ZoneGroup.resolveSelection(
-                    previousID: sel, previousGroup: previousGroup, in: groups)
-            } else if selectedGroupID == nil {
-                self.selectedGroupID = restoreOrPickGroup(groups)
-            }
+            let fresh = try await transport.getZoneGroups(via: probe)
+            applyTopology(fresh, previousGroup: previousGroup)
         } catch {
             Log.domain.error("Topology refresh failed")
         }
@@ -604,16 +598,24 @@ final class SonosCoordinator {
         players[group.coordinatorUUID]
     }
 
-    private func restoreOrPickGroup(_ groups: [ZoneGroup]) -> String? {
-        // A saved ID from a previous launch almost always has a stale
-        // generation suffix; resolve it by coordinator rather than
-        // dropping to the first group.
-        let last = settings.rememberLastZone ? settings.lastSelectedGroupID : nil
-        return ZoneGroup.resolveSelection(previousID: last, in: groups)
+    /// Installs fresh topology and re-derives the selection from the user's
+    /// preferred zone (see `ZoneGroup.effectiveSelection`). A fallback pick
+    /// is deliberately not persisted.
+    private func applyTopology(_ newGroups: [ZoneGroup], previousGroup: ZoneGroup?) {
+        self.groups = newGroups
+        let next = ZoneGroup.effectiveSelection(
+            preferred: preferredZone, currentID: selectedGroupID,
+            previousGroup: previousGroup, in: newGroups)
+        if next != selectedGroupID { self.selectedGroupID = next }
     }
 
     func select(group: ZoneGroup) {
         selectedGroupID = group.id
+        preferredZone = ZonePreference(group: group)
+        if settings.rememberLastZone {
+            settings.lastSelectedGroupID = group.id
+            settings.lastSelectedZoneMembers = group.members.map(\.uuid).sorted()
+        }
         Task { await refreshSelectedGroup() }
     }
 

@@ -182,4 +182,62 @@ struct ZoneGroup: Sendable, Equatable, Hashable {
         }
         return groups.first?.id
     }
+
+    /// The group the controls should target after a topology change.
+    ///
+    /// The user's explicit pick (`preferred`) wins whenever its speakers are
+    /// in the topology, even if the current selection is still a valid
+    /// group. Otherwise a fallback taken while those speakers were briefly
+    /// absent (reboot, overnight firmware update) stuck forever: the
+    /// fallback group never vanished, so nothing re-resolved.
+    static func effectiveSelection(
+        preferred: ZonePreference?,
+        currentID: String?,
+        previousGroup: ZoneGroup?,
+        in groups: [ZoneGroup]
+    ) -> String? {
+        if let preferred, let id = preferred.resolve(in: groups) { return id }
+        if let currentID, groups.contains(where: { $0.id == currentID }) { return currentID }
+        return resolveSelection(previousID: currentID, previousGroup: previousGroup, in: groups)
+    }
+}
+
+/// The zone the user explicitly chose, by speaker identity rather than by
+/// group ID (whose generation suffix changes on every regroup).
+struct ZonePreference: Equatable {
+    var coordinatorUUID: String
+    var memberUUIDs: Set<String>
+
+    init(coordinatorUUID: String, memberUUIDs: Set<String>) {
+        self.coordinatorUUID = coordinatorUUID
+        self.memberUUIDs = memberUUIDs
+    }
+
+    init(group: ZoneGroup) {
+        self.init(coordinatorUUID: group.coordinatorUUID,
+                  memberUUIDs: Set(group.members.map(\.uuid)))
+    }
+
+    /// Rebuilds a preference from persisted state. `savedGroupID` is a
+    /// `<coordinatorUUID>:<generation>` ID; members may be empty for
+    /// settings written before members were persisted.
+    init?(savedGroupID: String?, memberUUIDs: Set<String>) {
+        guard let savedGroupID, !savedGroupID.isEmpty,
+              let coord = savedGroupID.split(separator: ":", maxSplits: 1).first
+        else { return nil }
+        self.init(coordinatorUUID: String(coord), memberUUIDs: memberUUIDs)
+    }
+
+    /// The group holding the preferred speakers, or nil when none are present.
+    func resolve(in groups: [ZoneGroup]) -> String? {
+        if let g = groups.first(where: { $0.coordinatorUUID == coordinatorUUID }) { return g.id }
+        if let g = groups.first(where: { $0.members.contains { $0.uuid == coordinatorUUID } }) {
+            return g.id
+        }
+        if !memberUUIDs.isEmpty,
+           let g = groups.first(where: { $0.members.contains { memberUUIDs.contains($0.uuid) } }) {
+            return g.id
+        }
+        return nil
+    }
 }
